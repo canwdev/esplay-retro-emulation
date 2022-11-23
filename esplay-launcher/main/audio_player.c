@@ -14,7 +14,6 @@
 #include <limits.h>
 #include <unistd.h>
 #include <string.h>
-#include <time.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -100,7 +99,7 @@ static PlayerState player_state = {
 };
 static bool keys_locked = false;
 static bool backlight_on = true;
-static bool speaker_on = false;
+static bool speaker_on = true;
 
 // These need to be implemented for SDL/FreeRTOS seperately
 static PlayerCmd player_poll_cmd(void);
@@ -403,7 +402,7 @@ static void draw_player(const PlayerState *const state)
 	drawVolume(volume);
 	drawBattery(bat_state.percentage);
 
-	UG_FontSelect(&FONT_6X8);
+    UG_FontSelect(&FONT_8X12);
 
 	const int line_height = 16;
 	short y = 34;
@@ -416,12 +415,13 @@ static void draw_player(const PlayerState *const state)
 	// Song name
 	strncpy(truncnm, song->filename, MAX_FILENAME);
 	truncnm[MAX_FILENAME - 1] = 0;
-	snprintf(str_buf, 300, "Song: %s", truncnm);
+	snprintf(str_buf, 400, "%s", truncnm);
 	UG_PutString(3, y, str_buf);
-	y += line_height;
+	y += 30;
 
+	UG_FontSelect(&FONT_6X8);
 	// Song playmode
-	snprintf(str_buf, 300, "Playing Mode: %s", playing_mode_str[state->playing_mode]);
+	snprintf(str_buf, 300, "Play Mode: %s", playing_mode_str[state->playing_mode]);
 	UG_PutString(3, y, str_buf);
 	y += line_height;
 
@@ -454,7 +454,7 @@ static void handle_keypress(event_keypad_t keys, bool *quit)
 		*quit = true;
 	if (!keys.last_state.values[GAMEPAD_INPUT_UP] && keys.state.values[GAMEPAD_INPUT_UP])
 	{
-		int vol = audio_volume_get() + 5;
+		int vol = audio_volume_get() + 1;
 		if (vol > 100)
 			vol = 100;
 		audio_volume_set(vol);
@@ -463,13 +463,14 @@ static void handle_keypress(event_keypad_t keys, bool *quit)
 	}
 	if (!keys.last_state.values[GAMEPAD_INPUT_DOWN] && keys.state.values[GAMEPAD_INPUT_DOWN])
 	{
-		int vol = audio_volume_get() - 5;
-		if (vol < 1)
-			vol = 1;
-			audio_volume_set(vol);
+		int vol = audio_volume_get() - 1;
+		if (vol < 0)
+		{
+			vol = 0;
+		}
+		audio_volume_set(vol);
 
-		if (vol == 1)
-			audio_terminate();
+		if (vol == 0) audio_terminate();
 		settings_save(SettingAudioVolume, (int32_t)vol);
 		draw_player(&player_state);
 	}
@@ -484,7 +485,7 @@ static void handle_keypress(event_keypad_t keys, bool *quit)
 		set_display_brightness(backlight_on ? 0 : 50);
 		backlight_on = !backlight_on;
 	}
-	if (!keys.last_state.values[GAMEPAD_INPUT_L] && keys.state.values[GAMEPAD_INPUT_L])
+	if (!keys.last_state.values[GAMEPAD_INPUT_MENU] && keys.state.values[GAMEPAD_INPUT_MENU])
 	{
 		speaker_on = !speaker_on;
 		speaker_on ? audio_amp_enable() : audio_amp_disable();

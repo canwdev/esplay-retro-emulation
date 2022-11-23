@@ -2,6 +2,10 @@
   "files.associations": {
     ".blade.php": "html",
     ".tpl": "html",
-    "random": "c"
+    "random": "c",
+    "display.h": "c",
+    "esplay-ui.h": "c",
+    "ugui.h": "c",
+    "audio_player.h": "c"
   }
 }
