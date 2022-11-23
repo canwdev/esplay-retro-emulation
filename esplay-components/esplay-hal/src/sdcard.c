@@ -1,4 +1,5 @@
 #include "sdcard.h"
+
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
@@ -7,7 +8,6 @@
 #include "sdmmc_cmd.h"
 #include "esp_heap_caps.h"
 #include "esp_spiffs.h"
-#include "driver/sdio_slave.h"
 #include <dirent.h>
 #include <string.h>
 #include <unistd.h>
@@ -92,7 +92,8 @@ int sdcard_get_files_count(const char *path)
 
 int sdcard_files_get(const char *path, const char *extension, char ***filesOut)
 {
-    const int MAX_FILES = 2048;
+    const int MAX_FILES = 1024;
+    const uint32_t MALLOC_CAPS = MALLOC_CAP_DEFAULT; //MALLOC_CAP_SPIRAM
 
     int count = 0;
     char **result = (char **)malloc(MAX_FILES * sizeof(void *));
@@ -120,6 +121,13 @@ int sdcard_files_get(const char *path, const char *extension, char ***filesOut)
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL)
     {
+        // printf("Ŀ¼dir:%s %d ",entry->d_name,strlen(entry->d_name));
+        // for (size_t i = 0; i < 20; i++)
+        // {
+        //     printf("%x ",entry->d_name[i]);
+        // }
+        // printf("\n");
+        
         size_t len = strlen(entry->d_name);
 
         // ignore 'hidden' files (MAC)
@@ -191,7 +199,13 @@ esp_err_t sdcard_open(const char *base_path)
     {
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         host.flags = SDMMC_HOST_FLAG_1BIT;
-        host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+#ifdef CONFIG_SDIO_DAT2_DISABLED
+        /* For slave chips with 3.3V flash, DAT2 pullup conflicts with the pulldown
+           required by strapping pin (MTDI). We can either burn the EFUSE for the
+           strapping or just disable the DAT2 and work in 1-bit mode.
+        */
+        //host.flags |= SDIO_SLAVE_FLAG_DAT2_DISABLED;
+#endif
 
         sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
         slot_config.width = 1;

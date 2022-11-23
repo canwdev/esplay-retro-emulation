@@ -7,5 +7,6 @@
     "esplay-ui.h": "c",
     "ugui.h": "c",
     "audio_player.h": "c"
-  }
+  },
+  "idf.portWin": "COM8"
 }
