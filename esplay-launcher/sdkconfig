@@ -128,8 +128,14 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_OFFSET=0x8000
-# CONFIG_PARTITION_TABLE_MD5 is not set
+CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
+
+#
+# SDCard Configuration
+#
+CONFIG_SDIO_DAT2_DISABLED=y
+# end of SDCard Configuration
 
 #
 # Hardware configuration

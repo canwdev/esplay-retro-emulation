@@ -9,9 +9,9 @@
 #include "pin_definitions.h"
 
 static float Volume = 1.0f;
-static int volumeLevel = 30;
+static int volumeLevel = 20;
 static int sampleRate;
-
+#define USE_BUILT_IN_DAC
 int audio_volume_get()
 {
     return volumeLevel;
@@ -27,6 +27,7 @@ void audio_volume_set(int value)
 
     volumeLevel = value;
     Volume = (float)(volumeLevel*10) * 0.001f;
+    printf("Volume is %0.2f\n",Volume);
 
     if (volumeLevel == 0)
         audio_amp_disable();
@@ -34,9 +35,27 @@ void audio_volume_set(int value)
 
 void audio_init(int sample_rate)
 {
-    gpio_set_direction(AMP_SHDN, GPIO_MODE_OUTPUT);
+    // gpio_set_direction(AMP_SHDN, GPIO_MODE_OUTPUT);
     printf("%s: sample_rate=%d\n", __func__, sample_rate);
 
+#ifdef USE_BUILT_IN_DAC
+
+    i2s_config_t i2s_config = {
+        .mode = I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN, // Only TX
+        .sample_rate = sample_rate,
+        .bits_per_sample = 16,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT, //2-channels
+        .communication_format = I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB,
+        .dma_buf_count = 8,
+        //.dma_buf_len = 1472 / 2,  // (368samples * 2ch * 2(short)) = 1472
+        .dma_buf_len = 534,                       // (416samples * 2ch * 2(short)) = 1664
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1, //Interrupt level 1
+        .use_apll = 1
+        };
+    i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL);
+     //init DAC pad
+     i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN); //only enable GPIO25
+#else
     // NOTE: buffer needs to be adjusted per AUDIO_SAMPLE_RATE
     i2s_config_t i2s_config = {
         .mode = I2S_MODE_MASTER | I2S_MODE_TX, // Only TX
@@ -59,6 +78,7 @@ void audio_init(int sample_rate)
         .data_in_num = -1 //Not used
     };
     i2s_set_pin(I2S_NUM, &pin_config);
+#endif
     sampleRate = sample_rate;
     int32_t vol = volumeLevel;
     settings_load(SettingAudioVolume, &vol);
@@ -113,10 +133,10 @@ void audio_resume()
 
 void audio_amp_enable()
 {
-    gpio_set_level(AMP_SHDN, 1);
+    // gpio_set_level(AMP_SHDN, 1);
 }
 
 void audio_amp_disable()
 {
-    gpio_set_level(AMP_SHDN, 0);
+    // gpio_set_level(AMP_SHDN, 0);
 }

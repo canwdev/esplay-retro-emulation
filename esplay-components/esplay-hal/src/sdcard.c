@@ -4,10 +4,7 @@
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "driver/sdmmc_host.h"
-#include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
-#include "esp_heap_caps.h"
-#include "esp_spiffs.h"
 #include <dirent.h>
 #include <string.h>
 #include <unistd.h>
@@ -71,8 +68,8 @@ static void sort_files(char **files, int count)
 int sdcard_get_files_count(const char *path)
 {
     int file_count = 0;
-    DIR * dirp;
-    struct dirent * entry;
+    DIR *dirp;
+    struct dirent *entry;
 
     dirp = opendir(path); /* There should be error handling after this */
     if (dirp == NULL)
@@ -80,8 +77,10 @@ int sdcard_get_files_count(const char *path)
         printf("opendir failed.\n");
         return 0;
     }
-    while ((entry = readdir(dirp)) != NULL) {
-        if (entry->d_type == DT_REG) { /* If the entry is a regular file */
+    while ((entry = readdir(dirp)) != NULL)
+    {
+        if (entry->d_type == DT_REG)
+        { /* If the entry is a regular file */
             file_count++;
         }
     }
@@ -92,8 +91,7 @@ int sdcard_get_files_count(const char *path)
 
 int sdcard_files_get(const char *path, const char *extension, char ***filesOut)
 {
-    const int MAX_FILES = 1024;
-    const uint32_t MALLOC_CAPS = MALLOC_CAP_DEFAULT; //MALLOC_CAP_SPIRAM
+    const int MAX_FILES = 2048;
 
     int count = 0;
     char **result = (char **)malloc(MAX_FILES * sizeof(void *));
@@ -104,7 +102,7 @@ int sdcard_files_get(const char *path, const char *extension, char ***filesOut)
     if (dir == NULL)
     {
         printf("opendir failed.\n");
-        //abort();
+        // abort();
         return 0;
     }
 
@@ -127,7 +125,7 @@ int sdcard_files_get(const char *path, const char *extension, char ***filesOut)
         //     printf("%x ",entry->d_name[i]);
         // }
         // printf("\n");
-        
+
         size_t len = strlen(entry->d_name);
 
         // ignore 'hidden' files (MAC)
@@ -148,7 +146,7 @@ int sdcard_files_get(const char *path, const char *extension, char ***filesOut)
                 if (strcmp(temp, extension) == 0)
                 {
                     result[count] = (char *)malloc(len + 1);
-                    //printf("%s: allocated %p\n", __func__, result[count]);
+                    // printf("%s: allocated %p\n", __func__, result[count]);
 
                     if (!result[count])
                     {
@@ -178,11 +176,11 @@ void sdcard_files_free(char **files, int count)
 {
     for (int i = 0; i < count; ++i)
     {
-        //printf("%s: freeing item %p\n", __func__, files[i]);
+        // printf("%s: freeing item %p\n", __func__, files[i]);
         free(files[i]);
     }
 
-    //printf("%s: freeing array %p\n", __func__, files);
+    // printf("%s: freeing array %p\n", __func__, files);
     free(files);
 }
 
@@ -199,13 +197,7 @@ esp_err_t sdcard_open(const char *base_path)
     {
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         host.flags = SDMMC_HOST_FLAG_1BIT;
-#ifdef CONFIG_SDIO_DAT2_DISABLED
-        /* For slave chips with 3.3V flash, DAT2 pullup conflicts with the pulldown
-           required by strapping pin (MTDI). We can either burn the EFUSE for the
-           strapping or just disable the DAT2 and work in 1-bit mode.
-        */
-        //host.flags |= SDIO_SLAVE_FLAG_DAT2_DISABLED;
-#endif
+        host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
 
         sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
         slot_config.width = 1;
@@ -226,13 +218,14 @@ esp_err_t sdcard_open(const char *base_path)
         sdmmc_card_t *card;
         ret = esp_vfs_fat_sdmmc_mount(base_path, &host, &slot_config, &mount_config, &card);
 
+        printf("esp_vfs_fat_sdmmc_mount (%d)\n", ret);
         if (ret == ESP_OK)
         {
             isOpen = true;
         }
         else
         {
-            printf("sdcard_open: esp_vfs_fat_sdmmc_mount failed (%d)\n", ret);
+            printf("sdcard_open failed\n");
         }
     }
 
@@ -344,7 +337,7 @@ char *sdcard_create_savefile_path(const char *base_path, const char *fileName)
     if (!fileName)
         abort();
 
-    //printf("%s: base_path='%s', fileName='%s'\n", __func__, base_path, fileName);
+    // printf("%s: base_path='%s', fileName='%s'\n", __func__, base_path, fileName);
 
     // Determine folder
     char *extension = fileName + strlen(fileName); // place at NULL terminator
@@ -364,7 +357,7 @@ char *sdcard_create_savefile_path(const char *base_path, const char *fileName)
         abort();
     }
 
-    //printf("%s: extension='%s'\n", __func__, extension);
+    // printf("%s: extension='%s'\n", __func__, extension);
 
     const char *DATA_PATH = "/esplay/data/";
     const char *SAVE_EXTENSION = ".sav";

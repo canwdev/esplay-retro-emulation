@@ -1,12 +1,20 @@
 {
   "files.associations": {
+    "*.json.liquid": "json",
+    "*.yaml.liquid": "yaml",
+    "*.md.liquid": "markdown",
+    "*.js.liquid": "liquid-javascript",
+    "*.css.liquid": "liquid-css",
+    "*.scss.liquid": "liquid-scss",
+    "*.nas": "asm",
     ".blade.php": "html",
     ".tpl": "html",
     "random": "c",
     "display.h": "c",
     "esplay-ui.h": "c",
     "ugui.h": "c",
-    "audio_player.h": "c"
+    "audio_player.h": "c",
+    "sdcard.h": "c"
   },
   "idf.portWin": "COM8"
 }
