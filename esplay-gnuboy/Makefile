@@ -3,7 +3,7 @@
 # project subdirectory.
 #
 
-EXTRA_COMPONENT_DIRS := $(ESPLAY_SDK)/esplay-components/
+EXTRA_COMPONENT_DIRS := ../esplay-components/
 PROJECT_NAME := esplay-gnuboy
 
 include $(IDF_PATH)/make/project.mk
