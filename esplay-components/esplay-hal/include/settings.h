@@ -32,6 +32,7 @@ typedef enum esplay_scale_option {
 
 typedef enum Setting {
 	SettingAudioVolume = 0,
+	SettingStep = 0,
 	SettingBacklight,
 	SettingPlayingMode,
 	SettingRomPath,

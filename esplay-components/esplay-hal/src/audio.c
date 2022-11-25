@@ -9,7 +9,7 @@
 #include "pin_definitions.h"
 
 static float Volume = 1.0f;
-static int volumeLevel = 30;
+static int volumeLevel = 20;
 static int sampleRate;
 
 int audio_volume_get()

@@ -40,11 +40,12 @@ int emu_slot[6] = {1, 2, 2, 3, 3, 3};
 char *base_path = "/sd/roms/";
 battery_state bat_state;
 int num_menu = 6;
-char menu_text[6][20] = {"WiFi AP *", "Volume", "Brightness", "Upscaler", "Scale Alg", "Quit"};
+char menu_text[6][20] = {"WiFi AP *", "Volume", "Step", "Brightness", "Upscaler", "Scale Alg"};
 char scaling_text[3][20] = {"Native", "Normal", "Stretch"};
 char scaling_alg_text[3][20] = {"Nearest Neighbor", "Bilinier Intrp.", "Box Filtered"};
 int32_t wifi_en = 0;
 int32_t volume = 25;
+int32_t volume_step = 5;
 int32_t bright = 50;
 int32_t scaling = SCALE_FIT;
 int32_t scale_alg = NEAREST_NEIGHBOR;
@@ -106,9 +107,9 @@ static void handleCharging() {
 static void drawHomeScreen()
 {
     ui_clear_screen();
-    UG_SetForecolor(C_YELLOW);
+    UG_SetForecolor(C_AQUA_MARINE);
     UG_SetBackcolor(C_BLACK);
-    char *title = "ESPlay Micro";
+    char *title = "ESPlay Mod";
     UG_PutString((320 / 2) - (strlen(title) * 9 / 2), 12, title);
 
     if (wifi_en)
@@ -139,8 +140,8 @@ static void drawHomeScreen()
     UG_PutString(160, 50 + (56 * 2) + 13 + 18, "MENU");
 
     uint8_t volume = 25;
-    settings_load(SettingAudioVolume, &volume);
-    char volStr[3];
+    settings_load(SettingAudioVolume, (int32_t *) &volume);
+    char volStr[4];
     sprintf(volStr, "%i", volume);
     if (volume == 0)
     {
@@ -202,17 +203,17 @@ static void showOptionPage(int selected)
 {
     ui_clear_screen();
     /* Header */
-    UG_FillFrame(0, 0, 320 - 1, 16 - 1, C_BLUE);
+    UG_FillFrame(0, 0, 320 - 1, 16 - 1, C_YELLOW_GREEN);
     UG_SetForecolor(C_WHITE);
-    UG_SetBackcolor(C_BLUE);
+    UG_SetBackcolor(C_YELLOW_GREEN);
     char *msg = "Device Options";
     UG_PutString((320 / 2) - (strlen(msg) * 9 / 2), 2, msg);
     /* End Header */
 
     /* Footer */
-    UG_FillFrame(0, 240 - 16 - 1, 320 - 1, 240 - 1, C_BLUE);
+    UG_FillFrame(0, 240 - 16 - 1, 320 - 1, 240 - 1, C_YELLOW_GREEN);
     UG_SetForecolor(C_WHITE);
-    UG_SetBackcolor(C_BLUE);
+    UG_SetBackcolor(C_YELLOW_GREEN);
     msg = "     Browse      Change       ";
     UG_PutString((320 / 2) - (strlen(msg) * 9 / 2), 240 - 15, msg);
 
@@ -266,15 +267,21 @@ static void showOptionPage(int selected)
             break;
         case 2:
             if (i == selected)
+                ui_display_seekbar((320 - 103), top + 4, 100, volume_step * 10, C_YELLOW, C_RED);
+            else
+                ui_display_seekbar((320 - 103), top + 4, 100, volume_step * 10, C_WHITE, C_RED);
+            break;
+        case 3:
+            if (i == selected)
                 ui_display_seekbar((320 - 103), top + 4, 100, (bright * 100) / 100, C_YELLOW, C_RED);
             else
                 ui_display_seekbar((320 - 103), top + 4, 100, (bright * 100) / 100, C_WHITE, C_RED);
             break;
-        case 3:
+        case 4:
             UG_PutString(319 - (strlen(scaling_text[scaling]) * 9), top, scaling_text[scaling]);
             break;
 
-        case 4:
+        case 5:
             UG_PutString(319 - (strlen(scaling_alg_text[scale_alg]) * 9), top, scaling_alg_text[scale_alg]);
             break;
 
@@ -320,25 +327,31 @@ static int showOption()
                 settings_save(SettingWifi, (int32_t)wifi_en);
                 break;
             case 1:
-                volume -= 5;
+                volume -= volume_step;
                 if (volume < 0)
                     volume = 0;
                 settings_save(SettingAudioVolume, (int32_t)volume);
                 break;
             case 2:
-                bright -= 5;
+                volume_step -= 1;
+                if (volume_step < 1)
+                    volume_step = 1;
+                settings_save(SettingStep, (int32_t)volume_step);
+                break;
+            case 3:
+                bright -= volume_step;
                 if (bright < 1)
                     bright = 1;
                 set_display_brightness(bright);
                 settings_save(SettingBacklight, (int32_t)bright);
                 break;
-            case 3:
+            case 4:
                 scaling--;
                 if (scaling < 0)
                     scaling = 2;
                 settings_save(SettingScaleMode, (int32_t)scaling);
                 break;
-            case 4:
+            case 5:
                 scale_alg--;
                 if (scale_alg < 0)
                     scale_alg = 1;
@@ -359,25 +372,31 @@ static int showOption()
                 settings_save(SettingWifi, (int32_t)wifi_en);
                 break;
             case 1:
-                volume += 5;
+                volume += volume_step;
                 if (volume > 100)
                     volume = 100;
                 settings_save(SettingAudioVolume, (int32_t)volume);
                 break;
             case 2:
-                bright += 5;
+                volume_step += 1;
+                if (volume_step > 10)
+                    volume_step = 10;
+                settings_save(SettingStep, (int32_t)volume_step);
+                break;
+            case 3:
+                bright += volume_step;
                 if (bright > 100)
                     bright = 100;
                 set_display_brightness(bright);
                 settings_save(SettingBacklight, (int32_t)bright);
                 break;
-            case 3:
+            case 4:
                 scaling++;
                 if (scaling > 2)
                     scaling = 0;
                 settings_save(SettingScaleMode, (int32_t)scaling);
                 break;
-            case 4:
+            case 5:
                 scale_alg++;
                 if (scale_alg > 1)
                     scale_alg = 0;
@@ -389,12 +408,11 @@ static int showOption()
             }
             showOptionPage(selected);
         }
-        if (!prevKey.values[GAMEPAD_INPUT_A] && key.values[GAMEPAD_INPUT_A])
-            if (selected == 5)
-            {
-                vTaskDelay(10);
-                break;
-            }
+        if (!prevKey.values[GAMEPAD_INPUT_B] && key.values[GAMEPAD_INPUT_B])
+        {
+            vTaskDelay(10);
+            break;
+        }
 
         prevKey = key;
         vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -442,8 +460,8 @@ void app_main(void)
         abort();
     }
 
-    if (esp_reset_reason() == ESP_RST_POWERON)
-        display_show_splash();
+    // if (esp_reset_reason() == ESP_RST_POWERON)
+        // display_show_splash();
 
     sdcard_open("/sd"); // map SD card.
 
@@ -457,6 +475,10 @@ void app_main(void)
         settings_save(SettingWifi, (int32_t)wifi_en);
     if(settings_load(SettingAudioVolume, &volume) != 0)
         settings_save(SettingAudioVolume, (int32_t)volume);
+        
+    if(settings_load(SettingStep, &volume_step) != 0)
+        settings_save(SettingStep, (int32_t)volume_step);
+
     if(settings_load(SettingBacklight, &bright) != 0)
         settings_save(SettingBacklight, (int32_t)bright);
     if(settings_load(SettingScaleMode, &scaling) != 0)
@@ -508,14 +530,14 @@ void app_main(void)
     {
         input_gamepad_state joystick;
         gamepad_read(&joystick);
-        if (!prevKey.values[GAMEPAD_INPUT_LEFT] && joystick.values[GAMEPAD_INPUT_LEFT] && !scroll)
+        if (!prevKey.values[GAMEPAD_INPUT_RIGHT] && joystick.values[GAMEPAD_INPUT_RIGHT] && !scroll)
         {
             menuItem++;
             if (menuItem > NUM_EMULATOR - 1)
                 menuItem = 0;
             scroll = -SCROLLSPD;
         }
-        if (!prevKey.values[GAMEPAD_INPUT_RIGHT] && joystick.values[GAMEPAD_INPUT_RIGHT] && !scroll)
+        if (!prevKey.values[GAMEPAD_INPUT_LEFT] && joystick.values[GAMEPAD_INPUT_LEFT] && !scroll)
         {
             menuItem--;
             if (menuItem < 0)
@@ -547,19 +569,25 @@ void app_main(void)
             {
                 if (menuItem < 6)
                 {
+                    // Game Type Chooser UI
                     char *path = malloc(strlen(base_path) + strlen(emu_dir[menuItem]) + 1);
                     strcpy(path, base_path);
                     strcat(path, emu_dir[menuItem]);
                     int count = sdcard_get_files_count(path);
                     char text[320];
-                    sprintf(text, "%i games available", count);
+                    sprintf(text, "[%i] %i Games in %s", menuItem, count, path);
                     UG_FillFrame(0, 64, 319, 76, C_BLACK);
                     UG_PutString((320 / 2) - (strlen(text) * 9 / 2), 64, text);
                     renderGraphics(0, 78, 0, (56 * menuItem) + 24, 320, 56);
                 }
                 else
                 {
+                    // Audio Player
+                    int count = sdcard_get_files_count(AUDIO_FILE_PATH);
+                    char text[320];
+                    sprintf(text, "[%i] %i Musics in %s", menuItem, count, AUDIO_FILE_PATH);
                     UG_FillFrame(0, 64, 319, 76, C_BLACK);
+                    UG_PutString((320 / 2) - (strlen(text) * 9 / 2), 64, text);
                     renderGraphics(0, 78, 0, (56 * menuItem) + 24, 320, 56);
                 }
 
