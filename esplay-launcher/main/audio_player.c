@@ -100,7 +100,7 @@ static PlayerState player_state = {
 };
 static bool keys_locked = false;
 static bool backlight_on = true;
-static bool speaker_on = true;
+static bool speaker_on = false;
 
 // These need to be implemented for SDL/FreeRTOS seperately
 static PlayerCmd player_poll_cmd(void);
