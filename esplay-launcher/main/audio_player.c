@@ -346,13 +346,13 @@ static void player_task(void *arg)
 			{
 				if (state->playing_mode == PlayingModeShuffle) {
 					// Random select
-					int new_index = song_index
+					int new_index = song_index;
 					// prevent repeat
-					while (new_index === song_index)
+					while (new_index == song_index)
 					{
 						new_index = random_number(0, (int)state->playlist_length);
 					}
-					song_index = new_index
+					song_index = new_index;
 				}
 				else if (state->playing_mode != PlayingModeRepeatSong)
 				{
