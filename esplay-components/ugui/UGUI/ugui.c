@@ -4611,6 +4611,8 @@ UG_GUI* UG_GetGUI( ) {
 void UG_FontSelect( const UG_FONT* font )
 {
    gui->font = *font;
+   // gui->hans = hans;
+   // printf("gui->hans:%p\n",hans);
 }
 
 void UG_FillScreen( UG_COLOR c )
@@ -5011,18 +5013,68 @@ void UG_DrawLine( UG_S16 x1, UG_S16 y1, UG_S16 x2, UG_S16 y2, UG_COLOR c )
    }  
 }
 
+extern const uint8_t han16data[] asm("_binary_hzk16s_start");
+void UG_PutHan16Char(char* chr,UG_S16 x, UG_S16 y, UG_COLOR fc, UG_COLOR bc)
+{
+   UG_U16 i,j,k,xo,yo,c,bn,actual_char_width;
+   UG_U8 b,bt,read_buf[32];
+   UG_U32 index;
+   UG_COLOR color;
+   // void(*push_pixel)(UG_COLOR);
+   index = (94*(chr[0]-0xa1)+ chr[1]-0xa1 )*32;
+   // printf("index:%d\n",index);
+   // memcpy(read_buf,han16data+index,32);
+   // for(int i = 0; i<32;i++)
+   // {
+   //    printf("%x ",han16data[index+i]);
+   // }
+   // gui->pset(0,0,fc);
+   // gui->pset(0,1,bc);
+   /* Is hardware acceleration available? */
+   yo=y;
+   // if ( gui->driver[DRIVER_FILL_AREA].state & DRIVER_ENABLED )
+   {
+      // printf("in push function******************\n");
+	   //(void(*)(UG_COLOR))
+      // push_pixel = ((void*(*)(UG_S16, UG_S16, UG_S16, UG_S16))gui->driver[DRIVER_FILL_AREA].driver)(x,y,x+16-1,y+16-1);
+	   
+		  for( j=0;j<16;j++ )
+		  {
+           xo = x;
+            for(i=0;i<2;i++)
+            {
+               for( k=0;k<8;k++ )
+               {
+                  b= han16data[index+j*2+i]<<k &0x80;
+                  if( b )
+                  {
+                     gui->pset(xo,yo,fc);
+                  }
+                  else
+                  {
+                     gui->pset(xo,yo,bc);
+                  }
+                  xo++;
+               }
+            }
+            yo++;
+	 	 }
+   }
+}
+
 void UG_PutString( UG_S16 x, UG_S16 y, char* str )
 {
    UG_S16 xp,yp;
    UG_U8 cw;
    char chr;
+   char flag=0;
 
    xp=x;
    yp=y;
 
    while ( *str != 0 )
    {
-      chr = *str++;
+      chr = *str;
 	  if (chr < gui->font.start_char || chr > gui->font.end_char) continue;
       if ( chr == '\n' )
       {
@@ -5036,10 +5088,23 @@ void UG_PutString( UG_S16 x, UG_S16 y, char* str )
          xp = x;
          yp += gui->font.char_height+gui->char_v_space;
       }
+      if (str[0]>0x80&&str[1]>0x80)
+      {
+         // printf("stra:%x %x %c %c\n",str[0],str[1],str[0],str[1]);
+         /* code */
+         UG_PutHan16Char(str, xp, yp, gui->fore_color, gui->back_color);
+         str+=1;
+         xp+=17;
+      }
+      else
+      {
+         // printf("str:%c\n",chr);
+         UG_PutChar(chr, xp, yp, gui->fore_color, gui->back_color);
+         xp += cw + gui->char_h_space;
+      }
+         str+=1;
 
-      UG_PutChar(chr, xp, yp, gui->fore_color, gui->back_color);
 
-      xp += cw + gui->char_h_space;
    }
 }
 
@@ -5077,9 +5142,20 @@ void UG_ConsolePutString( char* str )
          gui->console.y_pos = gui->console.y_start;
          UG_FillFrame(gui->console.x_start,gui->console.y_start,gui->console.x_end,gui->console.y_end,gui->console.back_color);
       }
-
-      UG_PutChar(chr, gui->console.x_pos, gui->console.y_pos, gui->console.fore_color, gui->console.back_color);
-      str++;
+      if (str[0]>0x80)
+      {
+         // printf("strB:%x %x\n",str[0],str[1]);
+         /* code */
+         UG_PutHan16Char(str,gui->console.x_pos, gui->console.y_pos, gui->console.fore_color, gui->console.back_color);
+         str+=2;
+      }
+      else
+      {
+         UG_PutChar(chr, gui->console.x_pos, gui->console.y_pos, gui->console.fore_color, gui->console.back_color);
+         str+=1;
+      }
+      // UG_PutChar(chr, gui->console.x_pos, gui->console.y_pos, gui->console.fore_color, gui->console.back_color);
+      // str++;
    }
 }
 

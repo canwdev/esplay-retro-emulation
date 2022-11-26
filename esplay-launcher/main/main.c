@@ -423,9 +423,25 @@ static int showOption()
 
     return 0;
 }
-
-//----------------------------------------------------------------
-void app_main(void)
+#define PARTITION_NAME   "storage"
+void *get_hanz_addr(void)
+{
+    char* addr;
+	const esp_partition_t* data_partition;
+	spi_flash_mmap_handle_t hrom;
+	esp_err_t err;
+    data_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+    ESP_PARTITION_SUBTYPE_DATA_FAT, PARTITION_NAME);
+    if (data_partition != NULL) {
+        printf("partiton addr: 0x%08x; size: %d; label: %s\n", data_partition->address, data_partition->size, data_partition->label);
+    }
+	err=esp_partition_mmap(data_partition, 0, 300*1024, SPI_FLASH_MMAP_DATA, (const void**)&addr, &hrom);
+	//  err = esp_partition_read(part, 0, (void*)romdata, 0x100000);
+	// if (err!=ESP_OK) printf("Couldn't map rom part!\n");
+	printf("hans addr :%p\n", addr);
+    return (char*)addr;
+}
+int app_main(void)
 {
     settings_init();
     esplay_system_init();
@@ -464,6 +480,7 @@ void app_main(void)
         // display_show_splash();
 
     sdcard_open("/sd"); // map SD card.
+    // char *hans = get_hanz_addr();
 
     ui_init();
     charging_state st = getChargeStatus();
@@ -526,6 +543,8 @@ void app_main(void)
     charging_state chrg_st = getChargeStatus();
     input_gamepad_state prevKey;
     gamepad_read(&prevKey);
+    int startHeap = esp_get_free_heap_size();
+    printf("A HEAP:0x%x\n", startHeap);
     while (1)
     {
         input_gamepad_state joystick;
@@ -620,6 +639,7 @@ void app_main(void)
                 if (filename)
                 {
                     settings_save_str(SettingRomPath, filename);
+                    printf("game is %s,emu set %d\r\n",filename,emu_slot[menuItem]);
                     system_application_set(emu_slot[menuItem]);
                     ui_clear_screen();
                     ui_flush();
