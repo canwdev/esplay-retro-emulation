@@ -9,7 +9,6 @@
 #include "driver/gpio.h"
 #include "display.h"
 #include "hourglass_empty_black_48dp.h"
-#include "splash.h"
 
 #define LINE_BUFFERS (2)
 #define LINE_COUNT (8)
@@ -112,65 +111,6 @@ void write_frame_rectangleLE(short left, short top, short width, short height, u
     send_line_finish();
 }
 
-void renderGfx(short left, short top, short width, short height, uint16_t *buffer, short sx, short sy, short tileSetWidth)
-{
-    short x, y, xv, yv;
-    int sending_line = -1;
-    int calc_line = 0;
-
-    if (left < 0 )
-        left = 0;
-    if (top < 0)
-        top = 0;
-    if (width < 1)
-        width = 1;
-    if (height < 1)
-        height = 1;
-    if (buffer == NULL)
-    {
-        for (y = top; y < height + top; y++)
-        {
-            xv = 0;
-            for (x = left; x < width + left; x++)
-            {
-                line[calc_line][xv] = 0;
-                xv++;
-            }
-
-            if (sending_line != -1)
-                send_line_finish();
-            sending_line = calc_line;
-            calc_line = (calc_line == 1) ? 0 : 1;
-            send_lines_ext(y, left, width, line[sending_line], 1);
-        }
-
-        send_line_finish();
-    }
-    else
-    {
-        yv = 0;
-        for (y = top; y < top + height; y++)
-        {
-            xv = 0;
-            for (int i = left; i < left + width; ++i)
-            {
-                uint16_t pixel = buffer[(yv + sy) * tileSetWidth + (xv + sx)];
-                line[calc_line][xv] = ((pixel << 8) | (pixel >> 8));
-                xv++;
-            }
-
-            if (sending_line != -1)
-                send_line_finish();
-            sending_line = calc_line;
-            calc_line = (calc_line == 1) ? 0 : 1;
-            send_lines_ext(y, left, width, line[sending_line], 1);
-            yv++;
-        }
-    }
-
-    send_line_finish();
-}
-
 void display_show_hourglass()
 {
     write_frame_rectangleLE((LCD_WIDTH / 2) - (image_hourglass_empty_black_48dp.width / 2),
@@ -178,24 +118,6 @@ void display_show_hourglass()
                             image_hourglass_empty_black_48dp.width,
                             image_hourglass_empty_black_48dp.height,
                             image_hourglass_empty_black_48dp.pixel_data);
-}
-
-void display_show_splash()
-{
-    display_clear(0xffff);
-    for (short i = 1; i < 151; ++i)
-    {
-        renderGfx((LCD_WIDTH - splash_screen.width) / 2,
-                  (LCD_HEIGHT - splash_screen.height) / 2,
-                  i,
-                  splash_screen.height,
-                  splash_screen.pixel_data,
-                  0,
-                  0,
-                  150);
-        vTaskDelay(2);
-    }
-    vTaskDelay(100);
 }
 
 const static uint8_t batEmptyIcon[]={

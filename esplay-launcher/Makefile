@@ -4,7 +4,8 @@
 #
 
 EXTRA_COMPONENT_DIRS := ../esplay-components/
-PROJECT_NAME := RetroLauncher
+
+PROJECT_NAME := hello-world
 
 include $(IDF_PATH)/make/project.mk
 

@@ -212,6 +212,7 @@ esp_err_t sdcard_open(const char *base_path)
         sdmmc_card_t *card;
         ret = esp_vfs_fat_sdmmc_mount(base_path, &host, &slot_config, &mount_config, &card);
 
+        printf("sdcard_open: esp_vfs_fat_sdmmc_mount: %d\n", ret);
         if (ret == ESP_OK)
         {
             isOpen = true;

@@ -577,7 +577,6 @@ typedef struct
       UG_COLOR back_color;
    } console;
    UG_FONT font;
-   UG_U8* hans;
    UG_S8 char_h_space;
    UG_S8 char_v_space;
    UG_COLOR fore_color;
