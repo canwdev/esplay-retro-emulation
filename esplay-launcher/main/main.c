@@ -24,7 +24,7 @@
 #include "esplay-ui.h"
 
 // Apps
-// #include "audio_player.h"
+// #include "app_audio_player.h"
 #include "app_file_browser.h"
 
 battery_state bat_state;
@@ -335,7 +335,7 @@ void enter_app(int menuIndex)
         //#define AUDIO_FILE_PATH "/sd/audio"
         // Entry *new_entries;
         // int n_entries = fops_list_dir(&new_entries, AUDIO_FILE_PATH);
-        // audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});
+        // app_audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});
         // fops_free_entries(&new_entries, n_entries);
     }
     else

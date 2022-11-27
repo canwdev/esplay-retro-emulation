@@ -18,7 +18,7 @@
 
 #include "event.h"
 #include "file_ops.h"
-#include "audio_player.h"
+#include "app_audio_player.h"
 #include "acodecs.h"
 
 #define MAX_FILENAME 40
@@ -572,7 +572,7 @@ static void load_settings(PlayerState *state)
 	}
 }
 
-int audio_player(AudioPlayerParam params)
+int app_audio_player(AudioPlayerParam params)
 {
 	event_init();
 	memset(&player_state, 0, sizeof(PlayerState));
@@ -630,6 +630,7 @@ int audio_player(AudioPlayerParam params)
 	keys_locked = false;
 	event_deinit();
 	set_display_brightness(50);
+    vTaskDelay(20);
 
 	return 0;
 }

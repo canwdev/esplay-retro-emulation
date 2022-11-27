@@ -205,51 +205,50 @@ void gamepad_read(input_gamepad_state *out_state)
 
     *out_state = gamepad_state;
 
-
-    if (gamepad_state.values[GAMEPAD_INPUT_UP] == 1)
-    {
-        printf("UP\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_DOWN] == 1)
-    {
-        printf("DOWN\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_LEFT] == 1)
-    {
-        printf("LEFT\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_RIGHT] == 1)
-    {
-        printf("RIGHT\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_B] == 1)
-    {
-        printf("ESC\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_A] == 1)
-    {
-        printf("ENTER\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_SELECT] == 1)
-    {
-        printf("SELECT\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_START] == 1)
-    {
-        printf("START\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_MENU] == 1)
-    {
-        printf("MENU\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_L] == 1)
-    {
-        printf("GAMEPAD_INPUT_L\n");
-    }
-    else if (gamepad_state.values[GAMEPAD_INPUT_R] == 1)
-    {
-        printf("GAMEPAD_INPUT_R\n");
-    }
+    // if (gamepad_state.values[GAMEPAD_INPUT_UP] == 1)
+    // {
+    //     printf("UP\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_DOWN] == 1)
+    // {
+    //     printf("DOWN\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_LEFT] == 1)
+    // {
+    //     printf("LEFT\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_RIGHT] == 1)
+    // {
+    //     printf("RIGHT\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_B] == 1)
+    // {
+    //     printf("ESC\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_A] == 1)
+    // {
+    //     printf("ENTER\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_SELECT] == 1)
+    // {
+    //     printf("SELECT\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_START] == 1)
+    // {
+    //     printf("START\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_MENU] == 1)
+    // {
+    //     printf("MENU\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_L] == 1)
+    // {
+    //     printf("GAMEPAD_INPUT_L\n");
+    // }
+    // else if (gamepad_state.values[GAMEPAD_INPUT_R] == 1)
+    // {
+    //     printf("GAMEPAD_INPUT_R\n");
+    // }
 
     xSemaphoreGive(xSemaphore);
 }

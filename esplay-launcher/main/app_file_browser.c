@@ -7,13 +7,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+// Libs
 #include "event.h"
 #include "file_ops.h"
-
 #include "app_file_browser.h"
 #include "display.h"
 #include "ugui.h"
 #include "esplay-ui.h"
+
+// Apps
+#include "app_audio_player.h"
+// #include "app_image_viewer.h"
 
 /* Global state. */
 static struct FileBrowser
@@ -66,7 +70,7 @@ int sprint_human_size(char *dst, size_t strsize, off_t size)
     off_t human_size = size * 10;
     for (suffix = suffixes; human_size >= 10240; suffix++)
         human_size = (human_size + 512) / 1024;
-    return snprintf(dst, strsize, "%d.%d %c", (int)human_size / 10, (int)human_size % 10, *suffix);
+    return snprintf(dst, strsize, "%d.%d%c", (int)human_size / 10, (int)human_size % 10, *suffix);
 }
 
 static void ui_draw_browser(void)
@@ -192,29 +196,30 @@ static void ui_draw_details(Entry *entry, const char *cwd)
     ui_clear_screen();
     UG_SetForecolor(FG_COLOR_1);
     UG_SetBackcolor(BG_COLOR);
+    ui_draw_x_center_string(5, "File Details");
 
     char str_buf[300];
     char filesize_buf[32];
-
     const int line_height = 16;
-    short y = 34;
-
-    UG_PutString(5, y, "File Details");
+    short y = 10;
     y += line_height * 2;
+
+    UG_SetForecolor(FG_COLOR_2);
     // Full file name
     // TODO: Figure out wordwrapping or scrolling for long filenames
     snprintf(str_buf, 300, "Name: %s", entry->name);
     UG_PutString(5, y, str_buf);
     y += line_height * 2;
+
     // File size
     sprint_human_size(filesize_buf, 32, entry->size);
-    snprintf(str_buf, 256, "Size: %s(%ld Bytes)", filesize_buf, entry->size);
+    snprintf(str_buf, 256, "Size: %s (%ld Bytes)", filesize_buf, entry->size);
     UG_PutString(5, y, str_buf);
     y += line_height;
     // Modification time
     sprint_human_size(filesize_buf, 32, entry->size);
     ctime_r(&entry->mtime, filesize_buf);
-    snprintf(str_buf, 256, "ModTime: %s", filesize_buf);
+    snprintf(str_buf, 256, "MTime: %s", filesize_buf);
     UG_PutString(5, y, str_buf);
     y += line_height;
     // Permissions
@@ -236,6 +241,7 @@ static void ui_draw_details(Entry *entry, const char *cwd)
             break;
         }
     }
+    vTaskDelay(10);
 }
 
 static void browser_init(const char *cwd)
@@ -331,18 +337,16 @@ static int browser_cd_up(void)
 
 static void open_file(Entry *entry)
 {
-    ui_draw_details(entry, browser.cwd);
-    return;
     // TODO: Proper File handlers
     const FileType ftype = fops_determine_filetype(entry);
     if (ftype == FileTypeMP3 || ftype == FileTypeOGG || ftype == FileTypeMOD || ftype == FileTypeWAV || ftype == FileTypeFLAC ||
         ftype == FileTypeGME)
     {
-        // audio_player((AudioPlayerParam){browser.cwd_entries, browser.n_entries, browser.selection, browser.cwd, true});
+        app_audio_player((AudioPlayerParam){browser.cwd_entries, browser.n_entries, browser.selection, browser.cwd, true});
     }
     else if (ftype == FileTypeJPEG || ftype == FileTypePNG || ftype == FileTypeBMP || ftype == FileTypeGIF)
     {
-        // image_viewer((ImageViewerParams){browser.cwd_entries, browser.n_entries, browser.selection, browser.cwd});
+        // app_image_viewer((ImageViewerParams){browser.cwd_entries, browser.n_entries, browser.selection, browser.cwd});
     }
     else if (ftype == FileTypeGB || ftype == FileTypeGBC || ftype == FileTypeNES || ftype == FileTypeGG || ftype == FileTypeCOL ||
              ftype == FileTypeSMS)
@@ -449,6 +453,7 @@ int app_file_browser(FileBrowserParam params)
     }
 
     fops_free_entries(&browser.cwd_entries, browser.n_entries);
+    vTaskDelay(20);
 
     return 0;
 }

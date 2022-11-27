@@ -17,6 +17,9 @@
     "event.h": "c",
     "file_ops.h": "c",
     "app_file_browser.h": "c",
-    "time.h": "c"
+    "time.h": "c",
+    "stdint.h": "c",
+    "app_image_viewer.h": "c",
+    "app_audio_player.h": "c"
   }
 }
