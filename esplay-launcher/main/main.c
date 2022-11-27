@@ -1,9 +1,16 @@
 // ESP System
 #include <stdio.h>
+#include "limits.h" /* PATH_MAX */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_spi_flash.h"
+#include "esp_ota_ops.h"
+
+// Wi-Fi
+#include "esp_wifi.h"
+#include "esp_http_server.h"
+#include "esp_event_loop.h"
 
 // Basics
 #include "settings.h"
@@ -17,16 +24,53 @@
 #include "esplay-ui.h"
 
 // Apps
-#include "audio_player.h"
+// #include "audio_player.h"
 
 battery_state bat_state;
 
+int32_t wifi_en = 0;
 int32_t volume = 20;
 int32_t volume_step = 2;
 int32_t bright = 50;
 
+esp_err_t start_file_server(const char *base_path);
+esp_err_t event_handler(void *ctx, system_event_t *event)
+{
+    return ESP_OK;
+}
+void es_init_wifi_ap()
+{
+    if (wifi_en)
+    {
+        tcpip_adapter_init();
+        ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+        ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+        wifi_config_t ap_config = {
+            .ap = {
+                .ssid = "esplay",
+                .authmode = WIFI_AUTH_OPEN,
+                .max_connection = 2,
+                .beacon_interval = 200}};
+        uint8_t channel = 5;
+        ap_config.ap.channel = channel;
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+
+        ESP_ERROR_CHECK(esp_wifi_start());
+
+        /* Start the file server */
+        ESP_ERROR_CHECK(start_file_server("/sd"));
+
+        printf("\n Wi-Fi Ready, AP on channel %d\n", (int)channel);
+    }
+}
+
 void es_load_settings()
 {
+    if (settings_load(SettingWifi, &wifi_en) != 0)
+        settings_save(SettingWifi, (int32_t)wifi_en);
 
     if (settings_load(SettingAudioVolume, &volume) != 0)
         settings_save(SettingAudioVolume, (int32_t)volume);
@@ -36,6 +80,7 @@ void es_load_settings()
 
     if (settings_load(SettingBacklight, &bright) != 0)
         settings_save(SettingBacklight, (int32_t)bright);
+
 }
 
 void es_init_system()
@@ -74,18 +119,17 @@ void es_init_system()
     sdcard_open("/sd"); // map SD card.
 
     es_load_settings();
+    es_init_wifi_ap();
 
     ui_init();
 }
 
-int render_settings()
-{
-    printf("render_settings\n");
-    return 0;
-}
+void enter_app();
+int render_settings();
+void draw_x_center_string(UG_S16 y, char *str);
 
 #define MENU_COUNT 3
-char menu_names[MENU_COUNT][10] = {"Files", "Music", "Test"};
+char menu_names[MENU_COUNT][10] = {"Files", "Music", "Games"};
 
 #define BG_COLOR C_BLACK
 #define FG_COLOR_1 C_ORANGE
@@ -94,13 +138,13 @@ void draw_home_screen()
 {
     ui_clear_screen();
 
-    // Status Bar START
+    /* START Status Bar */
     UG_SetForecolor(FG_COLOR_1);
     UG_SetBackcolor(BG_COLOR);
     char *title = "ESPlay Mod";
     int draw_top = 5;
     int draw_left = 5;
-    UG_PutString((SCREEN_WIDTH / 2) - (strlen(title) * 9 / 2), draw_top, title);
+    draw_x_center_string(draw_top, title);
 
     // Draw Volume & Battery
     uint8_t _volume = volume;
@@ -113,9 +157,9 @@ void draw_home_screen()
     char batStr[8];
     sprintf(batStr, "Bat:%i%% (%i)", bat_state.percentage, bat_state.millivolts);
     UG_PutString((SCREEN_WIDTH - 80), draw_top, batStr);
-    // Status Bar END
+    /* END Status Bar */
 
-    // Button Help START
+    /* START Help Buttons */
     UG_SetForecolor(FG_COLOR_2);
     UG_SetBackcolor(BG_COLOR);
     const int _x1 = 40;
@@ -139,9 +183,17 @@ void draw_home_screen()
 
     UG_FillRoundFrame(_x2 - 5, _y1 + 18 - 1, 168 + (3 * 9) + 3, _y1 + 18 + 11, 7, FG_COLOR_2);
     UG_PutString(_x2, _y1 + 18, "MENU");
-    // Button Help END
+    /* END Help Buttons */
+
+    if (wifi_en)
+    {
+        UG_SetForecolor(FG_COLOR_2);
+        UG_SetBackcolor(BG_COLOR);
+        title = "Wi-Fi AP on http://192.168.4.1";
+        draw_x_center_string(SCREEN_HEIGHT - 18, title);
+    }
 }
-void enter_app();
+
 void render_home()
 {
     draw_home_screen();
@@ -169,7 +221,7 @@ void render_home()
             menuIndex--;
             lastUpdate = 0;
             if (menuIndex < 0)
-                menuIndex = MENU_COUNT;
+                menuIndex = MENU_COUNT - 1;
         }
 
         if (lastUpdate != 1)
@@ -180,7 +232,7 @@ void render_home()
             char text[320];
             sprintf(text, "[%i] %s", menuIndex, menu_names[menuIndex]);
             UG_FillFrame(0, 90, 319, 102, BG_COLOR);
-            UG_PutString((SCREEN_WIDTH / 2) - (strlen(text) * 9 / 2), 90, text);
+            draw_x_center_string(90, text);
 
             lastUpdate = 1;
         }
@@ -212,8 +264,7 @@ void render_home()
         if (!prevKey.values[GAMEPAD_INPUT_A] && joystick.values[GAMEPAD_INPUT_A])
         {
             printf("A Pressed\n");
-
-            enter_app();
+            enter_app(menuIndex);
 
             draw_home_screen();
             lastUpdate = 0;
@@ -223,6 +274,7 @@ void render_home()
         if (!prevKey.values[GAMEPAD_INPUT_B] && joystick.values[GAMEPAD_INPUT_B])
         {
             printf("B Pressed\n");
+
             draw_home_screen();
             lastUpdate = 0;
             doRefresh = 1;
@@ -266,12 +318,237 @@ void app_main()
 }
 
 #define AUDIO_FILE_PATH "/sd/audio"
-void enter_app()
+void enter_app(int menuIndex)
 {
-    Entry *new_entries;
+    if (menuIndex == 0)
+    {
+    }
+    else if (menuIndex == 1)
+    {
+        // Entering Music...
+        // Entry *new_entries;
+        // int n_entries = fops_list_dir(&new_entries, AUDIO_FILE_PATH);
+        // audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});
+        // fops_free_entries(&new_entries, n_entries);
+    }
+    else
+    {
+        printf("menuIndex %d is invalid!\n", menuIndex);
+    }
+}
 
-    int n_entries = fops_list_dir(&new_entries, AUDIO_FILE_PATH);
-    audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});
+#define SETTINGS_COUNT 4
+char settings_names[SETTINGS_COUNT][20] = {"Wi-Fi AP", "Volume", "Step", "Brightness"};
 
-    fops_free_entries(&new_entries, n_entries);
+void draw_settings(int index)
+{
+    ui_clear_screen();
+
+    /* START Header */
+    UG_FillFrame(0, 0, 320 - 1, 16 - 1, FG_COLOR_1);
+    UG_SetForecolor(C_WHITE);
+    UG_SetBackcolor(FG_COLOR_1);
+    char *msg = "Settings";
+    draw_x_center_string(2, msg);
+    /* END Help Buttons */
+
+    /* START Footer */
+    UG_FillFrame(0, 240 - 16 - 1, 320 - 1, 240 - 1, C_YELLOW_GREEN);
+    UG_SetForecolor(C_WHITE);
+    UG_SetBackcolor(C_YELLOW_GREEN);
+    msg = "U/D=Browse </>=Change B=Back";
+    draw_x_center_string(240 - 15, msg);
+    /* END Footer */
+
+    /* START System Info */
+    esp_app_desc_t *desc = esp_ota_get_app_description();
+
+    UG_SetForecolor(FG_COLOR_2);
+    UG_SetBackcolor(BG_COLOR);
+    char verStr[40];
+    sprintf(verStr, "%s, IDF %s", desc->project_name, desc->idf_ver);
+    UG_PutString(5, 240 - 72, verStr);
+    UG_PutString(5, 240 - 58, desc->version);
+
+    esp_chip_info_t chip_info;
+    esp_chip_info(&chip_info);
+    sprintf(verStr, "Silicon Rev%d, %dMB %s flash", chip_info.revision,
+            spi_flash_get_chip_size() / (1024 * 1024),
+            (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+    UG_PutString(5, 240 - 44, verStr);
+
+    /* END System Info */
+
+    int top = 26;
+    for (int i = 0; i < SETTINGS_COUNT; i++)
+    {
+        if (i == index)
+        {
+            UG_FillFrame(0, top, SCREEN_WIDTH, top + 12, C_DARK_CYAN);
+            UG_SetBackcolor(C_DARK_CYAN);
+            UG_SetForecolor(C_WHITE);
+        }
+        else
+        {
+            UG_SetBackcolor(BG_COLOR);
+            UG_SetForecolor(FG_COLOR_2);
+        }
+
+        UG_PutString(5, top, settings_names[i]);
+
+        // show value on right side
+
+        char str[3];
+        switch (i)
+        {
+        case 0:
+            ui_display_switch(307, top, wifi_en, C_WHITE, FG_COLOR_1, FG_COLOR_2);
+            break;
+        case 1:
+            sprintf(str, "%d", volume);
+            UG_PutString(SCREEN_WIDTH - 130, top, str);
+            ui_display_seekbar((SCREEN_WIDTH - 103), top + 4, 100, (volume * 100) / 100, C_WHITE, FG_COLOR_1);
+            break;
+        case 2:
+            sprintf(str, "%d", volume_step);
+            UG_PutString(SCREEN_WIDTH - 30, top, str);
+            break;
+        case 3:
+            sprintf(str, "%d", bright);
+            UG_PutString(SCREEN_WIDTH - 130, top, str);
+            ui_display_seekbar((SCREEN_WIDTH - 103), top + 4, 100, (bright * 100) / 100, C_WHITE, FG_COLOR_1);
+            break;
+        default:
+            break;
+        }
+
+        top += 16;
+    }
+
+    ui_flush();
+}
+
+int toggle_settings(int index, bool isRight)
+{
+    if (index == 0)
+    {
+        wifi_en = !wifi_en;
+        settings_save(SettingWifi, (int32_t)wifi_en);
+        return 1;
+    }
+    else if (index == 1)
+    {
+        if (isRight)
+        {
+            volume += volume_step;
+            if (volume > 100)
+                volume = 100;
+        }
+        else
+        {
+            volume -= volume_step;
+            if (volume < 0)
+                volume = 0;
+        }
+        settings_save(SettingAudioVolume, (int32_t)volume);
+    }
+    else if (index == 2)
+    {
+        if (isRight)
+        {
+            volume_step += 1;
+            if (volume_step > 10)
+                volume_step = 10;
+        }
+        else
+        {
+            volume_step -= 1;
+            if (volume_step < 1)
+                volume_step = 1;
+        }
+        settings_save(SettingStep, (int32_t)volume_step);
+    }
+    else if (index == 3)
+    {
+        if (isRight)
+        {
+            bright += volume_step;
+            if (bright > 100)
+                bright = 100;
+        }
+        else
+        {
+            bright -= volume_step;
+            if (bright < 1)
+                bright = 1;
+        }
+        set_display_brightness(bright);
+        settings_save(SettingBacklight, (int32_t)bright);
+    }
+
+    draw_settings(index);
+    return 0;
+}
+
+int render_settings()
+{
+    int32_t wifi_state = wifi_en;
+    int selected = 0;
+    draw_settings(selected);
+
+    input_gamepad_state prevKey;
+    gamepad_read(&prevKey);
+    while (1)
+    {
+        input_gamepad_state key;
+        gamepad_read(&key);
+
+        if (!prevKey.values[GAMEPAD_INPUT_DOWN] && key.values[GAMEPAD_INPUT_DOWN])
+        {
+            ++selected;
+            if (selected > SETTINGS_COUNT - 1)
+                selected = 0;
+            draw_settings(selected);
+        }
+        else if (!prevKey.values[GAMEPAD_INPUT_UP] && key.values[GAMEPAD_INPUT_UP])
+        {
+            --selected;
+            if (selected < 0)
+                selected = SETTINGS_COUNT - 1;
+            draw_settings(selected);
+        }
+        else if (!prevKey.values[GAMEPAD_INPUT_LEFT] && key.values[GAMEPAD_INPUT_LEFT])
+        {
+            int r = toggle_settings(selected, false);
+            if (r)
+            {
+                break;
+            }
+        }
+        else if (!prevKey.values[GAMEPAD_INPUT_RIGHT] && key.values[GAMEPAD_INPUT_RIGHT])
+        {
+            int r = toggle_settings(selected, true);
+            if (r)
+            {
+                break;
+            }
+        }
+        else if (!prevKey.values[GAMEPAD_INPUT_B] && key.values[GAMEPAD_INPUT_B])
+        {
+            break;
+        }
+
+        prevKey = key;
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+
+    if (wifi_en != wifi_state)
+        return 1;
+
+    return 0;
+}
+
+void draw_x_center_string(UG_S16 y, char *str)
+{
+    UG_PutString((SCREEN_WIDTH / 2) - (strlen(str) * 9 / 2), y, str);
 }

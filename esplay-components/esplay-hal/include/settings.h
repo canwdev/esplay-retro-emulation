@@ -35,7 +35,10 @@ typedef enum Setting {
 	SettingStep = 0,
 	SettingBacklight,
 	SettingPlayingMode,
+	SettingRomPath,
+	SettingScaleMode,
 	SettingWifi,
+	SettingAlg,
 	SettingMax,
 } Setting;
 
