@@ -8,9 +8,9 @@
 #include "esp_ota_ops.h"
 
 // Wi-Fi
-#include "esp_wifi.h"
-#include "esp_http_server.h"
-#include "esp_event_loop.h"
+// #include "esp_wifi.h"
+// #include "esp_http_server.h"
+// #include "esp_event_loop.h"
 
 // Basics
 #include "settings.h"
@@ -32,40 +32,42 @@ int32_t wifi_en = 0;
 int32_t volume = 20;
 int32_t volume_step = 2;
 int32_t bright = 50;
+int32_t scaling = SCALE_FIT;
+int32_t scale_alg = NEAREST_NEIGHBOR;
 
-esp_err_t start_file_server(const char *base_path);
-esp_err_t event_handler(void *ctx, system_event_t *event)
-{
-    return ESP_OK;
-}
-void es_init_wifi_ap()
-{
-    if (wifi_en)
-    {
-        tcpip_adapter_init();
-        ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
-        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-        ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-        wifi_config_t ap_config = {
-            .ap = {
-                .ssid = "esplay",
-                .authmode = WIFI_AUTH_OPEN,
-                .max_connection = 2,
-                .beacon_interval = 200}};
-        uint8_t channel = 5;
-        ap_config.ap.channel = channel;
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+// esp_err_t start_file_server(const char *base_path);
+// esp_err_t event_handler(void *ctx, system_event_t *event)
+// {
+//     return ESP_OK;
+// }
+// void es_init_wifi_ap()
+// {
+//     if (wifi_en)
+//     {
+//         tcpip_adapter_init();
+//         ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
+//         wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+//         ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+//         ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+//         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+//         wifi_config_t ap_config = {
+//             .ap = {
+//                 .ssid = "esplay",
+//                 .authmode = WIFI_AUTH_OPEN,
+//                 .max_connection = 2,
+//                 .beacon_interval = 200}};
+//         uint8_t channel = 5;
+//         ap_config.ap.channel = channel;
+//         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
 
-        ESP_ERROR_CHECK(esp_wifi_start());
+//         ESP_ERROR_CHECK(esp_wifi_start());
 
-        /* Start the file server */
-        ESP_ERROR_CHECK(start_file_server("/sd"));
+//         /* Start the file server */
+//         ESP_ERROR_CHECK(start_file_server("/sd"));
 
-        printf("\n Wi-Fi Ready, AP on channel %d\n", (int)channel);
-    }
-}
+//         printf("\n Wi-Fi Ready, AP on channel %d\n", (int)channel);
+//     }
+// }
 
 void es_load_settings()
 {
@@ -81,6 +83,11 @@ void es_load_settings()
     if (settings_load(SettingBacklight, &bright) != 0)
         settings_save(SettingBacklight, (int32_t)bright);
 
+    if (settings_load(SettingScaleMode, &scaling) != 0)
+        settings_save(SettingScaleMode, (int32_t)scaling);
+
+    if (settings_load(SettingAlg, &scale_alg) != 0)
+        settings_save(SettingAlg, (int32_t)scale_alg);
 }
 
 void es_init_system()
@@ -119,7 +126,7 @@ void es_init_system()
     sdcard_open("/sd"); // map SD card.
 
     es_load_settings();
-    es_init_wifi_ap();
+    // es_init_wifi_ap();
 
     ui_init();
 }
@@ -134,6 +141,7 @@ char menu_names[MENU_COUNT][10] = {"Files", "Music", "Games"};
 #define BG_COLOR C_BLACK
 #define FG_COLOR_1 C_ORANGE
 #define FG_COLOR_2 C_CYAN
+#define FG_COLOR_3 C_YELLOW_GREEN
 void draw_home_screen()
 {
     ui_clear_screen();
@@ -187,7 +195,7 @@ void draw_home_screen()
 
     if (wifi_en)
     {
-        UG_SetForecolor(FG_COLOR_2);
+        UG_SetForecolor(FG_COLOR_3);
         UG_SetBackcolor(BG_COLOR);
         title = "Wi-Fi AP on http://192.168.4.1";
         draw_x_center_string(SCREEN_HEIGHT - 18, title);
@@ -337,8 +345,10 @@ void enter_app(int menuIndex)
     }
 }
 
-#define SETTINGS_COUNT 4
-char settings_names[SETTINGS_COUNT][20] = {"Wi-Fi AP", "Volume", "Step", "Brightness"};
+#define SETTINGS_COUNT 6
+char settings_names[SETTINGS_COUNT][20] = {"Wi-Fi AP", "Volume", "Step", "Brightness", "Upscaler", "Scale Alg"};
+char scaling_text[3][20] = {"Native", "Normal", "Stretch"};
+char scaling_alg_text[3][20] = {"Nearest Neighbor", "Bilinier Intrp.", "Box Filtered"};
 
 void draw_settings(int index)
 {
@@ -353,7 +363,7 @@ void draw_settings(int index)
     /* END Help Buttons */
 
     /* START Footer */
-    UG_FillFrame(0, 240 - 16 - 1, 320 - 1, 240 - 1, C_YELLOW_GREEN);
+    UG_FillFrame(0, 240 - 16 - 1, 320 - 1, 240 - 1, FG_COLOR_3);
     UG_SetForecolor(C_WHITE);
     UG_SetBackcolor(C_YELLOW_GREEN);
     msg = "U/D=Browse </>=Change B=Back";
@@ -411,18 +421,24 @@ void draw_settings(int index)
             break;
         case 2:
             sprintf(str, "%d", volume_step);
-            UG_PutString(SCREEN_WIDTH - 30, top, str);
+            UG_PutString(319 - (strlen(str) * 9), top, str);
             break;
         case 3:
             sprintf(str, "%d", bright);
             UG_PutString(SCREEN_WIDTH - 130, top, str);
             ui_display_seekbar((SCREEN_WIDTH - 103), top + 4, 100, (bright * 100) / 100, C_WHITE, FG_COLOR_1);
             break;
+        case 4:
+            UG_PutString(319 - (strlen(scaling_text[scaling]) * 9), top, scaling_text[scaling]);
+            break;
+        case 5:
+            UG_PutString(319 - (strlen(scaling_alg_text[scale_alg]) * 9), top, scaling_alg_text[scale_alg]);
+            break;
         default:
             break;
         }
 
-        top += 16;
+        top += 17;
     }
 
     ui_flush();
@@ -484,6 +500,38 @@ int toggle_settings(int index, bool isRight)
         }
         set_display_brightness(bright);
         settings_save(SettingBacklight, (int32_t)bright);
+    }
+    else if (index == 4)
+    {
+        if (isRight)
+        {
+            scaling++;
+            if (scaling > 2)
+                scaling = 0;
+        }
+        else
+        {
+            scaling--;
+            if (scaling < 0)
+                scaling = 2;
+        }
+        settings_save(SettingScaleMode, (int32_t)scaling);
+    }
+    else if (index == 5)
+    {
+        if (isRight)
+        {
+            scale_alg++;
+            if (scale_alg > 1)
+                scale_alg = 0;
+        }
+        else
+        {
+            scale_alg--;
+            if (scale_alg < 0)
+                scale_alg = 1;
+        }
+        settings_save(SettingAlg, (int32_t)scale_alg);
     }
 
     draw_settings(index);
