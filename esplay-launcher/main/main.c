@@ -25,6 +25,7 @@
 
 // Apps
 // #include "audio_player.h"
+#include "app_file_browser.h"
 
 battery_state bat_state;
 
@@ -133,15 +134,10 @@ void es_init_system()
 
 void enter_app();
 int render_settings();
-void draw_x_center_string(UG_S16 y, char *str);
 
 #define MENU_COUNT 3
 char menu_names[MENU_COUNT][10] = {"Files", "Music", "Games"};
 
-#define BG_COLOR C_BLACK
-#define FG_COLOR_1 C_ORANGE
-#define FG_COLOR_2 C_CYAN
-#define FG_COLOR_3 C_YELLOW_GREEN
 void draw_home_screen()
 {
     ui_clear_screen();
@@ -152,7 +148,7 @@ void draw_home_screen()
     char *title = "ESPlay Mod";
     int draw_top = 5;
     int draw_left = 5;
-    draw_x_center_string(draw_top, title);
+    ui_draw_x_center_string(draw_top, title);
 
     // Draw Volume & Battery
     uint8_t _volume = volume;
@@ -163,7 +159,7 @@ void draw_home_screen()
 
     battery_level_read(&bat_state);
     char batStr[8];
-    sprintf(batStr, "Bat:%i%% (%i)", bat_state.percentage, bat_state.millivolts);
+    sprintf(batStr, "Bat:%i%% %imV", bat_state.percentage, bat_state.millivolts);
     UG_PutString((SCREEN_WIDTH - 80), draw_top, batStr);
     /* END Status Bar */
 
@@ -198,12 +194,15 @@ void draw_home_screen()
         UG_SetForecolor(FG_COLOR_3);
         UG_SetBackcolor(BG_COLOR);
         title = "Wi-Fi AP on http://192.168.4.1";
-        draw_x_center_string(SCREEN_HEIGHT - 18, title);
+        ui_draw_x_center_string(SCREEN_HEIGHT - 18, title);
     }
 }
 
 void render_home()
 {
+    // Faster development
+    enter_app(0);
+
     draw_home_screen();
 
     int menuIndex = 0;
@@ -224,7 +223,7 @@ void render_home()
             if (menuIndex > MENU_COUNT - 1)
                 menuIndex = 0;
         }
-        if (!prevKey.values[GAMEPAD_INPUT_LEFT] && joystick.values[GAMEPAD_INPUT_LEFT])
+        else if (!prevKey.values[GAMEPAD_INPUT_LEFT] && joystick.values[GAMEPAD_INPUT_LEFT])
         {
             menuIndex--;
             lastUpdate = 0;
@@ -240,7 +239,7 @@ void render_home()
             char text[320];
             sprintf(text, "[%i] %s", menuIndex, menu_names[menuIndex]);
             UG_FillFrame(0, 90, 319, 102, BG_COLOR);
-            draw_x_center_string(90, text);
+            ui_draw_x_center_string(90, text);
 
             lastUpdate = 1;
         }
@@ -278,8 +277,7 @@ void render_home()
             lastUpdate = 0;
             doRefresh = 1;
         }
-
-        if (!prevKey.values[GAMEPAD_INPUT_B] && joystick.values[GAMEPAD_INPUT_B])
+        else if (!prevKey.values[GAMEPAD_INPUT_B] && joystick.values[GAMEPAD_INPUT_B])
         {
             printf("B Pressed\n");
 
@@ -287,8 +285,7 @@ void render_home()
             lastUpdate = 0;
             doRefresh = 1;
         }
-
-        if (!prevKey.values[GAMEPAD_INPUT_MENU] && joystick.values[GAMEPAD_INPUT_MENU])
+        else if (!prevKey.values[GAMEPAD_INPUT_MENU] && joystick.values[GAMEPAD_INPUT_MENU])
         {
             printf("Menu Pressed\n");
 
@@ -325,15 +322,17 @@ void app_main()
     }
 }
 
-#define AUDIO_FILE_PATH "/sd/audio"
 void enter_app(int menuIndex)
 {
     if (menuIndex == 0)
     {
+        app_file_browser((FileBrowserParam){.cwd = "/sd"});
     }
     else if (menuIndex == 1)
     {
         // Entering Music...
+
+        //#define AUDIO_FILE_PATH "/sd/audio"
         // Entry *new_entries;
         // int n_entries = fops_list_dir(&new_entries, AUDIO_FILE_PATH);
         // audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});
@@ -359,7 +358,7 @@ void draw_settings(int index)
     UG_SetForecolor(C_WHITE);
     UG_SetBackcolor(FG_COLOR_1);
     char *msg = "Settings";
-    draw_x_center_string(2, msg);
+    ui_draw_x_center_string(2, msg);
     /* END Help Buttons */
 
     /* START Footer */
@@ -367,7 +366,7 @@ void draw_settings(int index)
     UG_SetForecolor(C_WHITE);
     UG_SetBackcolor(C_YELLOW_GREEN);
     msg = "U/D=Browse </>=Change B=Back";
-    draw_x_center_string(240 - 15, msg);
+    ui_draw_x_center_string(240 - 15, msg);
     /* END Footer */
 
     /* START System Info */
@@ -421,7 +420,8 @@ void draw_settings(int index)
             break;
         case 2:
             sprintf(str, "%d", volume_step);
-            UG_PutString(319 - (strlen(str) * 9), top, str);
+            ui_draw_y_right_string(top, str);
+
             break;
         case 3:
             sprintf(str, "%d", bright);
@@ -429,10 +429,12 @@ void draw_settings(int index)
             ui_display_seekbar((SCREEN_WIDTH - 103), top + 4, 100, (bright * 100) / 100, C_WHITE, FG_COLOR_1);
             break;
         case 4:
-            UG_PutString(319 - (strlen(scaling_text[scaling]) * 9), top, scaling_text[scaling]);
+            ui_draw_y_right_string(top, scaling_text[scaling]);
+
             break;
         case 5:
-            UG_PutString(319 - (strlen(scaling_alg_text[scale_alg]) * 9), top, scaling_alg_text[scale_alg]);
+            ui_draw_y_right_string(top, scaling_alg_text[scale_alg]);
+
             break;
         default:
             break;
@@ -594,9 +596,4 @@ int render_settings()
         return 1;
 
     return 0;
-}
-
-void draw_x_center_string(UG_S16 y, char *str)
-{
-    UG_PutString((SCREEN_WIDTH / 2) - (strlen(str) * 9 / 2), y, str);
 }

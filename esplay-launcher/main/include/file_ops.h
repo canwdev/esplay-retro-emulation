@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <stdbool.h>
 #include <sys/types.h>
+#include <stddef.h>
 
 /** Information associated to each directory entry */
 typedef struct Entry {
@@ -50,3 +51,11 @@ void fops_free_entries(Entry **entries, int n_entires);
 
 /** Given a filename find out the file type  */
 FileType fops_determine_filetype(Entry *entry);
+
+/// Truncate src to dst at the back.
+/// dst must be allocated with at least len bytes.
+void truncate_str(char *dst, const char *src, const size_t len);
+
+/// Truncate src to dst at the front.
+/// dst must be allocated with at least len bytes.
+void fruncate_str(char *dst, const char *src, const size_t len);

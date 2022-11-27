@@ -109,6 +109,17 @@ void ui_display_switch(int x, int y, int state, UG_COLOR backColor, UG_COLOR ena
 
 }
 
+
+void ui_draw_x_center_string(UG_S16 y, char *str)
+{
+    UG_PutString((SCREEN_WIDTH / 2) - (strlen(str) * 9 / 2), y, str);
+}
+
+void ui_draw_y_right_string(UG_S16 x, char *str)
+{
+    UG_PutString(SCREEN_WIDTH - 5 - (strlen(str) * 9), x, str);
+}
+
 /// Make the file name nicer by cutting at brackets or (last) dot.
 static int cut_file_name(char *filename){
 
