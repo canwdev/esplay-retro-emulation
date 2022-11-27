@@ -1,9 +1,11 @@
+// ESP System
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 
+// Basics
 #include "settings.h"
 #include "power.h"
 #include "display.h"
@@ -13,6 +15,9 @@
 #include "sdcard.h"
 #include "ugui.h"
 #include "esplay-ui.h"
+
+// Apps
+#include "audio_player.h"
 
 battery_state bat_state;
 
@@ -73,6 +78,12 @@ void es_init_system()
     ui_init();
 }
 
+int render_settings()
+{
+    printf("render_settings\n");
+    return 0;
+}
+
 #define MENU_COUNT 3
 char menu_names[MENU_COUNT][10] = {"Files", "Music", "Test"};
 
@@ -130,13 +141,14 @@ void draw_home_screen()
     UG_PutString(_x2, _y1 + 18, "MENU");
     // Button Help END
 }
-
+void enter_app();
 void render_home()
 {
     draw_home_screen();
 
     int menuIndex = 0;
     int doRefresh = 1;
+    int lastUpdate = 0;
     int oldArrowsTick = -1;
     input_gamepad_state prevKey;
     gamepad_read(&prevKey);
@@ -148,24 +160,30 @@ void render_home()
         if (!prevKey.values[GAMEPAD_INPUT_RIGHT] && joystick.values[GAMEPAD_INPUT_RIGHT])
         {
             menuIndex++;
+            lastUpdate = 0;
             if (menuIndex > MENU_COUNT - 1)
                 menuIndex = 0;
         }
         if (!prevKey.values[GAMEPAD_INPUT_LEFT] && joystick.values[GAMEPAD_INPUT_LEFT])
         {
             menuIndex--;
+            lastUpdate = 0;
             if (menuIndex < 0)
                 menuIndex = MENU_COUNT;
         }
 
-        // Render Current Menu
+        if (lastUpdate != 1)
+        {
+            // Render Current Menu
+            UG_SetForecolor(FG_COLOR_2);
+            UG_SetBackcolor(BG_COLOR);
+            char text[320];
+            sprintf(text, "[%i] %s", menuIndex, menu_names[menuIndex]);
+            UG_FillFrame(0, 90, 319, 102, BG_COLOR);
+            UG_PutString((SCREEN_WIDTH / 2) - (strlen(text) * 9 / 2), 90, text);
 
-        UG_SetForecolor(FG_COLOR_2);
-        UG_SetBackcolor(BG_COLOR);
-        char text[320];
-        sprintf(text, "[%i] %s", menuIndex, menu_names[menuIndex]);
-        UG_FillFrame(0, 90, 319, 102, BG_COLOR);
-        UG_PutString((SCREEN_WIDTH / 2) - (strlen(text) * 9 / 2), 90, text);
+            lastUpdate = 1;
+        }
 
         // Render arrows START
         int t = xTaskGetTickCount() / (400 / portTICK_PERIOD_MS);
@@ -194,16 +212,33 @@ void render_home()
         if (!prevKey.values[GAMEPAD_INPUT_A] && joystick.values[GAMEPAD_INPUT_A])
         {
             printf("A Pressed\n");
+
+            enter_app();
+
+            draw_home_screen();
+            lastUpdate = 0;
+            doRefresh = 1;
         }
 
         if (!prevKey.values[GAMEPAD_INPUT_B] && joystick.values[GAMEPAD_INPUT_B])
         {
             printf("B Pressed\n");
+            draw_home_screen();
+            lastUpdate = 0;
+            doRefresh = 1;
         }
 
         if (!prevKey.values[GAMEPAD_INPUT_MENU] && joystick.values[GAMEPAD_INPUT_MENU])
         {
             printf("Menu Pressed\n");
+
+            int r = render_settings();
+            if (r)
+                esp_restart();
+
+            draw_home_screen();
+            lastUpdate = 0;
+            doRefresh = 1;
         }
 
         if (doRefresh)
@@ -228,4 +263,15 @@ void app_main()
     {
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
+}
+
+#define AUDIO_FILE_PATH "/sd/audio"
+void enter_app()
+{
+    Entry *new_entries;
+
+    int n_entries = fops_list_dir(&new_entries, AUDIO_FILE_PATH);
+    audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});
+
+    fops_free_entries(&new_entries, n_entries);
 }

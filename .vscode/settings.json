@@ -9,6 +9,12 @@
     "power.h": "c",
     "gamepad.h": "c",
     "display.h": "c",
-    "hourglass_empty_black_48dp.h": "c"
+    "hourglass_empty_black_48dp.h": "c",
+    "settings.h": "c",
+    "unistd.h": "c",
+    "string.h": "c",
+    "ugui.h": "c",
+    "event.h": "c",
+    "file_ops.h": "c"
   }
 }

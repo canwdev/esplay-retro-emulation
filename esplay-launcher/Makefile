@@ -5,7 +5,7 @@
 
 EXTRA_COMPONENT_DIRS := ../esplay-components/
 
-PROJECT_NAME := hello-world
+PROJECT_NAME := LauncherLite
 
 include $(IDF_PATH)/make/project.mk
 
