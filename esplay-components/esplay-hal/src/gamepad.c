@@ -238,6 +238,10 @@ void gamepad_read(input_gamepad_state *out_state)
     {
         printf("START\n");
     }
+    else if (gamepad_state.values[GAMEPAD_INPUT_MENU] == 1)
+    {
+        printf("MENU\n");
+    }
     else if (gamepad_state.values[GAMEPAD_INPUT_L] == 1)
     {
         printf("GAMEPAD_INPUT_L\n");
