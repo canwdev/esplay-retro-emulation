@@ -71,10 +71,11 @@ typedef enum PlayingMode
 	PlayingModeNormal = 0,
 	PlayingModeRepeatSong,
 	PlayingModeRepeatPlaylist,
+	PlayingModeShuffle,
 	PlayingModeMax,
 } PlayingMode;
 
-static const char *playing_mode_str[PlayingModeMax] = {"Normal", "Repeat Song", "Repeat Playlist/Folder"};
+static const char *playing_mode_str[PlayingModeMax] = {"Normal", "Repeat Song", "Repeat Playlist/Folder", "Shuffle"};
 
 // Owned by player task, can only be modified/written to by player task
 typedef struct PlayerState
@@ -313,6 +314,10 @@ static PlayerResult play_song(const Song *const song)
 	return result;
 }
 
+int random_number(int min, int max){
+   return min + rand() / (RAND_MAX / (max - min + 1) + 1);
+}
+
 /** This task/thread plays a playlist of files automatically. */
 static void player_task(void *arg)
 {
@@ -336,9 +341,22 @@ static void player_task(void *arg)
 				break;
 			}
 
-			if (state->playing_mode != PlayingModeRepeatSong || res == PlayerResultNextSong)
+			if (res == PlayerResultNextSong)
 			{
-				song_index = (song_index + 1) % (int)state->playlist_length;
+				if (state->playing_mode == PlayingModeShuffle) {
+					// Random select
+					int new_index = song_index;
+					// prevent repeat
+					while (new_index == song_index)
+					{
+						new_index = random_number(0, (int)state->playlist_length);
+					}
+					song_index = new_index;
+				}
+				else if (state->playing_mode != PlayingModeRepeatSong)
+				{
+					song_index = (song_index + 1) % (int)state->playlist_length;
+				}
 			}
 
 			state->playlist_index = song_index;
@@ -388,12 +406,12 @@ static void draw_player(const PlayerState *const state)
 	}
 	else
 	{
-		UG_SetForecolor(C_WHITE);
+		UG_SetForecolor(C_CYAN);
 		UG_SetBackcolor(C_BLACK);
 	}
 	UG_PutString(25, 12, volStr);
 
-	UG_SetForecolor(C_WHITE);
+	UG_SetForecolor(C_CYAN);
 	UG_SetBackcolor(C_BLACK);
 
 	battery_state bat_state;
