@@ -344,19 +344,19 @@ static void open_file(Entry *entry)
     {
         app_audio_player((AudioPlayerParam){browser.cwd_entries, browser.n_entries, browser.selection, browser.cwd, true});
     }
-    else if (ftype == FileTypeJPEG || ftype == FileTypePNG || ftype == FileTypeBMP || ftype == FileTypeGIF)
-    {
-        // app_image_viewer((ImageViewerParams){browser.cwd_entries, browser.n_entries, browser.selection, browser.cwd});
-    }
-    else if (ftype == FileTypeGB || ftype == FileTypeGBC || ftype == FileTypeNES || ftype == FileTypeGG || ftype == FileTypeCOL ||
-             ftype == FileTypeSMS)
-    {
-        // emulator_launcher((EmulatorLauncherParam){.entry = &browser.cwd_entries[browser.selection],
-        //                                           .rom_filetype = ftype,
-        //                                           .cwd = browser.cwd,
-        //                                           .fb_selection = browser.selection,
-        //                                           .fb_scroll = browser.scroll});
-    }
+    // else if (ftype == FileTypeJPEG || ftype == FileTypePNG || ftype == FileTypeBMP || ftype == FileTypeGIF)
+    // {
+    //     // app_image_viewer((ImageViewerParams){browser.cwd_entries, browser.n_entries, browser.selection, browser.cwd});
+    // }
+    // else if (ftype == FileTypeGB || ftype == FileTypeGBC || ftype == FileTypeNES || ftype == FileTypeGG || ftype == FileTypeCOL ||
+    //          ftype == FileTypeSMS)
+    // {
+    //     // emulator_launcher((EmulatorLauncherParam){.entry = &browser.cwd_entries[browser.selection],
+    //     //                                           .rom_filetype = ftype,
+    //     //                                           .cwd = browser.cwd,
+    //     //                                           .fb_selection = browser.selection,
+    //     //                                           .fb_scroll = browser.scroll});
+    // }
     else
     {
         ui_draw_details(entry, browser.cwd);

@@ -8,9 +8,9 @@
 #include "esp_ota_ops.h"
 
 // Wi-Fi
-// #include "esp_wifi.h"
-// #include "esp_http_server.h"
-// #include "esp_event_loop.h"
+#include "esp_wifi.h"
+#include "esp_http_server.h"
+#include "esp_event_loop.h"
 
 // Basics
 #include "settings.h"
@@ -25,7 +25,7 @@
 
 
 // Apps
-// #include "app_audio_player.h"
+#include "app_audio_player.h"
 #include "app_file_browser.h"
 
 battery_state bat_state;
@@ -37,39 +37,39 @@ int32_t bright = 50;
 int32_t scaling = SCALE_FIT;
 int32_t scale_alg = NEAREST_NEIGHBOR;
 
-// esp_err_t start_file_server(const char *base_path);
-// esp_err_t event_handler(void *ctx, system_event_t *event)
-// {
-//     return ESP_OK;
-// }
-// void es_init_wifi_ap()
-// {
-//     if (wifi_en)
-//     {
-//         tcpip_adapter_init();
-//         ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
-//         wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-//         ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-//         ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-//         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-//         wifi_config_t ap_config = {
-//             .ap = {
-//                 .ssid = "esplay",
-//                 .authmode = WIFI_AUTH_OPEN,
-//                 .max_connection = 2,
-//                 .beacon_interval = 200}};
-//         uint8_t channel = 5;
-//         ap_config.ap.channel = channel;
-//         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+esp_err_t start_file_server(const char *base_path);
+esp_err_t event_handler(void *ctx, system_event_t *event)
+{
+    return ESP_OK;
+}
+void es_init_wifi_ap()
+{
+    if (wifi_en)
+    {
+        tcpip_adapter_init();
+        ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+        ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+        wifi_config_t ap_config = {
+            .ap = {
+                .ssid = "esplay",
+                .authmode = WIFI_AUTH_OPEN,
+                .max_connection = 2,
+                .beacon_interval = 200}};
+        uint8_t channel = 5;
+        ap_config.ap.channel = channel;
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
 
-//         ESP_ERROR_CHECK(esp_wifi_start());
+        ESP_ERROR_CHECK(esp_wifi_start());
 
-//         /* Start the file server */
-//         ESP_ERROR_CHECK(start_file_server("/sd"));
+        /* Start the file server */
+        ESP_ERROR_CHECK(start_file_server("/sd"));
 
-//         printf("\n Wi-Fi Ready, AP on channel %d\n", (int)channel);
-//     }
-// }
+        printf("\n Wi-Fi Ready, AP on channel %d\n", (int)channel);
+    }
+}
 
 void es_load_settings()
 {
@@ -130,7 +130,7 @@ void es_init_system()
     sdcard_open("/sd"); // map SD card.
 
     es_load_settings();
-    // es_init_wifi_ap();
+    es_init_wifi_ap();
 
     ui_init();
 }
@@ -204,7 +204,7 @@ void draw_home_screen()
 void render_home()
 {
     // Faster development
-    enter_app(0);
+    // enter_app(0);
 
     draw_home_screen();
 
@@ -335,11 +335,11 @@ void enter_app(int menuIndex)
     {
         // Entering Music...
 
-        // #define AUDIO_FILE_PATH "/sd/audio"
-        // Entry *new_entries;
-        // int n_entries = fops_list_dir(&new_entries, AUDIO_FILE_PATH);
-        // app_audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});
-        // fops_free_entries(&new_entries, n_entries);
+        #define AUDIO_FILE_PATH "/sd/audio"
+        Entry *new_entries;
+        int n_entries = fops_list_dir(&new_entries, AUDIO_FILE_PATH);
+        app_audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});
+        fops_free_entries(&new_entries, n_entries);
     }
     else
     {
