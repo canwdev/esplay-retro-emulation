@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include "disp_spi.h"
 
+#define SCREEN_WIDTH 320
+#define SCREEN_HEIGHT 240
+
 //*****************************************************************************
 //
 // Make sure all of the definitions in this header have a C binding.
@@ -30,11 +33,9 @@ extern "C"
 void display_init();
 void backlight_deinit();
 void write_frame_rectangleLE(short left, short top, short width, short height, uint16_t* buffer);
-void renderGfx(short left, short top, short width, short height, uint16_t* buffer, short sx, short sy, short tileSetWidth);
 void display_prepare();
 void display_show_hourglass();
 void display_show_empty_battery();
-void display_show_splash();
 void display_clear(uint16_t color);
 void set_display_brightness(int percent);
 void display_prepare();

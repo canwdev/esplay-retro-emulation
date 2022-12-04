@@ -10,7 +10,8 @@
 #include "esplay-ui.h"
 
 #define MAX_CHR (320 / 9)
-#define MAX_ITEM (193 / 15) // 193 = LCD Height (240) - header(16) - footer(16) - char height (15)
+#define CONTAIN_HEIGHT  192 //192=LCD Height (240) - header(16) - footer(16) - char height (16)
+#define MAX_ITEM (CONTAIN_HEIGHT / 16) // 193 = LCD Height (240) - header(16) - footer(16) - char height (15)
 
 uint16_t *fb;
 static UG_GUI *ugui;
@@ -108,6 +109,17 @@ void ui_display_switch(int x, int y, int state, UG_COLOR backColor, UG_COLOR ena
 
 }
 
+
+void ui_draw_x_center_string(UG_S16 y, char *str)
+{
+    UG_PutString((SCREEN_WIDTH / 2) - (strlen(str) * 9 / 2), y, str);
+}
+
+void ui_draw_y_right_string(UG_S16 x, char *str)
+{
+    UG_PutString(SCREEN_WIDTH - 5 - (strlen(str) * 9), x, str);
+}
+
 /// Make the file name nicer by cutting at brackets or (last) dot.
 static int cut_file_name(char *filename){
 
@@ -166,12 +178,12 @@ static void ui_draw_page_list(char **files, int fileCount, int currentItem, int 
   UG_PutString(237, 240 - 15, ">");
   /* End Footer */
 
-  const int innerHeight = 193;
+  const int innerHeight = CONTAIN_HEIGHT;
   int page = currentItem / MAX_ITEM;
   page *= MAX_ITEM;
   const int itemHeight = innerHeight / MAX_ITEM;
 
-  UG_FillFrame(0, 15, 320 - 1, 193 + 15, C_BLACK);
+  UG_FillFrame(0, 15, 320 - 1, CONTAIN_HEIGHT + 23, C_BLACK);
 
   if (fileCount < 1)
   {
@@ -193,10 +205,10 @@ static void ui_draw_page_list(char **files, int fileCount, int currentItem, int 
     {
       if (page + line >= fileCount)
         break;
-      short top = 19 + (line * itemHeight) - 1;
+      short top = 18 + (line * itemHeight) - 1;
       if ((page) + line == currentItem)
       {
-        UG_FillFrame(0, top - 1, 320 - 1, top + 12 + 1, C_YELLOW);
+        UG_FillFrame(0, top - 1, 320 - 1, top + 14 + 1, C_YELLOW);
         UG_SetForecolor(C_BLACK);
         UG_SetBackcolor(C_YELLOW);
       }
@@ -209,20 +221,30 @@ static void ui_draw_page_list(char **files, int fileCount, int currentItem, int 
       char *filename = files[page + line];
       if (!filename)
         abort();
-      int length = cut_file_name(filename);
+      // int length = cut_file_name(filename);
+      int length = strlen(filename);
+      // printf("file name:%s %d\n",filename,length);
       displayStr[line] = (char *)malloc(length + 1);
       strncpy(displayStr[line], filename, length);
       displayStr[line][length] = 0;
-      char truncnm[MAX_CHR];
-      strncpy(truncnm, displayStr[line], MAX_CHR);
-      truncnm[MAX_CHR - 1] = 0;
-      UG_PutString((320 / 2) - (strlen(truncnm) * 9 / 2), top, truncnm);
+      char truncnm[length+1];
+      // if(length>MAX_CHR)
+        // length = MAX_CHR;
+      // strncpy(truncnm, displayStr[line], MAX_CHR);
+      strcpy(truncnm,displayStr[line]);
+      free(displayStr[line]);
+      truncnm[length] = 0;
+      // UG_PutString((320 / 2) - (strlen(truncnm) * 9 / 2), top, truncnm);
+      UG_PutString(10, top, truncnm);
     }
     ui_flush();
+        // int startHeap = esp_get_free_heap_size();
+    // printf("A HEAP:0x%x\n", startHeap);
     for (int i = 0; i < MAX_ITEM; ++i)
     {
-      free(displayStr[i]);
+      // free(displayStr[i]);
     }
+    
   }
 }
 
