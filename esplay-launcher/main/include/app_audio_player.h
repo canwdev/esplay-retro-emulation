@@ -12,4 +12,4 @@ typedef struct AudioPlayerParam {
 } AudioPlayerParam;
 
 /** Start the audio player at the file entry at index. */
-int audio_player(AudioPlayerParam param);
+int app_audio_player(AudioPlayerParam param);

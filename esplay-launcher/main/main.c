@@ -1,38 +1,32 @@
+// ESP System
+#include <stdio.h>
 #include "limits.h" /* PATH_MAX */
 #include "freertos/FreeRTOS.h"
-#include "esp_wifi.h"
+#include "freertos/task.h"
 #include "esp_system.h"
-#include "esp_event.h"
-#include "esp_event_loop.h"
-#include "driver/gpio.h"
-#include "esp_partition.h"
+#include "esp_spi_flash.h"
 #include "esp_ota_ops.h"
-#include "esp_heap_caps.h"
-#include "esp_http_server.h"
-#include "soc/dport_reg.h"
 
-#include "rom/rtc.h"
-#include "soc/soc.h"
-#include "soc/rtc.h"
-#include "soc/rtc_cntl_reg.h"
+// Wi-Fi
+// #include "esp_wifi.h"
+// #include "esp_http_server.h"
+// #include "esp_event_loop.h"
 
+// Basics
 #include "settings.h"
-#include "gamepad.h"
-#include "event.h"
+#include "power.h"
 #include "display.h"
+#include "gamepad.h"
 #include "audio.h"
 #include "power.h"
 #include "sdcard.h"
-#include "esplay-ui.h"
 #include "ugui.h"
-#include "graphics.h"
-#include "file_ops.h"
-#include "esp_sleep.h"
+#include "esplay-ui.h"
 
 
 // Apps
 // #include "app_audio_player.h"
-// #include "app_file_browser.h"
+#include "app_file_browser.h"
 
 battery_state bat_state;
 
@@ -335,13 +329,13 @@ void enter_app(int menuIndex)
 {
     if (menuIndex == 0)
     {
-        // app_file_browser((FileBrowserParam){.cwd = "/sd"});
+        app_file_browser((FileBrowserParam){.cwd = "/sd"});
     }
     else if (menuIndex == 1)
     {
         // Entering Music...
 
-        //#define AUDIO_FILE_PATH "/sd/audio"
+        // #define AUDIO_FILE_PATH "/sd/audio"
         // Entry *new_entries;
         // int n_entries = fops_list_dir(&new_entries, AUDIO_FILE_PATH);
         // app_audio_player((AudioPlayerParam){new_entries, n_entries, 0, AUDIO_FILE_PATH, true});

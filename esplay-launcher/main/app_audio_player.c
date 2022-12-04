@@ -1,25 +1,25 @@
-#include <audio_player.h>
-
-#include <event.h>
-#include <file_ops.h>
-#include <gamepad.h>
-#include <audio.h>
-#include <display.h>
-#include <ugui.h>
-#include <esplay-ui.h>
-#include <graphics.h>
-#include <settings.h>
-#include <power.h>
-
+// ESP System
 #include <limits.h>
 #include <unistd.h>
 #include <string.h>
+#include <time.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-#include <freertos/task.h>
+// Basics
+#include "settings.h"
+#include "power.h"
+#include "display.h"
+#include "gamepad.h"
+#include "ugui.h"
+#include "esplay-ui.h"
+#include "audio.h"
 
-#include <acodecs.h>
+#include "event.h"
+#include "file_ops.h"
+#include "app_audio_player.h"
+#include "acodecs.h"
 
 #define MAX_FILENAME 40
 
@@ -100,7 +100,7 @@ static PlayerState player_state = {
 };
 static bool keys_locked = false;
 static bool backlight_on = true;
-static bool speaker_on = true;
+static bool speaker_on = false;
 
 // These need to be implemented for SDL/FreeRTOS seperately
 static PlayerCmd player_poll_cmd(void);
@@ -390,40 +390,13 @@ static void player_task(void *arg)
 static void draw_player(const PlayerState *const state)
 {
 	ui_clear_screen();
-
-	renderGraphics((320 - 150) / 2, 0, 128, 416, 150, 23);
-
 	UG_FontSelect(&FONT_8X12);
 
-	int32_t volume;
-	settings_load(SettingAudioVolume, &volume);
-	char volStr[3];
-	sprintf(volStr, "%i", volume);
-	if (volume == 0)
-	{
-		UG_SetForecolor(C_RED);
-		UG_SetBackcolor(C_BLACK);
-	}
-	else
-	{
-		UG_SetForecolor(C_CYAN);
-		UG_SetBackcolor(C_BLACK);
-	}
-	UG_PutString(25, 12, volStr);
-
-	UG_SetForecolor(C_CYAN);
 	UG_SetBackcolor(C_BLACK);
+	UG_SetForecolor(C_ORANGE);
 
-	battery_state bat_state;
-	battery_level_read(&bat_state);
-
-	drawVolume(volume);
-	drawBattery(bat_state.percentage);
-
-    UG_FontSelect(&FONT_8X12);
-
-	const int line_height = 16;
-	short y = 34;
+	const int line_height = 20;
+	short y = 5;
 
 	char str_buf[300];
 	Song *song = &state->playlist[state->playlist_index];
@@ -434,32 +407,31 @@ static void draw_player(const PlayerState *const state)
 	strncpy(truncnm, song->filename, MAX_FILENAME);
 	truncnm[MAX_FILENAME - 1] = 0;
 	snprintf(str_buf, 400, "%s", truncnm);
-	UG_PutString(3, y, str_buf);
+	UG_PutString(5, y, str_buf);
 	y += 30;
 
-	UG_FontSelect(&FONT_6X8);
+	UG_SetForecolor(C_CYAN);
 	// Song playmode
 	snprintf(str_buf, 300, "Play Mode: %s", playing_mode_str[state->playing_mode]);
-	UG_PutString(3, y, str_buf);
+	UG_PutString(5, y, str_buf);
 	y += line_height;
 
 	// Show volume
 	snprintf(str_buf, 300, "Volume: %d%%", audio_volume_get());
-	UG_PutString(3, y, str_buf);
+	UG_PutString(5, y, str_buf);
 	y += line_height;
 
-	renderGraphics(10, y, 0, 439, 208, 106);
-
 	// Show Playing or paused/DAC on image
-	UG_PutString(222, y + 11, state->playing ? "Pause" : "Continue");
-	UG_PutString(222, y + 50, "Go Back");
-	UG_PutString(222, y + 89, speaker_on ? "Speaker off" : "Speaker on");
-	y += 115;
-
+	UG_PutString(100, y, state->playing ? "Pause" : "Continue");
+	y += line_height;
+	UG_PutString(100, y, "Go Back");
+	y += line_height;
+	UG_PutString(100, y, speaker_on ? "Speaker off" : "Speaker on");
+	y += line_height + 20;
 	// Explain start and stop button behaviour
-	UG_PutString(3, y, "SELECT: Toggle screen off");
-	y += line_height + 3;
-	UG_PutString(3, y, "START: Cycle through Playing Mode");
+	UG_PutString(5, y, "SELECT: Toggle screen off");
+	y += line_height;
+	UG_PutString(5, y, "START: Cycle through Playing Mode");
 
 	ui_flush();
 }
@@ -482,9 +454,9 @@ static void handle_keypress(event_keypad_t keys, bool *quit)
 	if (!keys.last_state.values[GAMEPAD_INPUT_DOWN] && keys.state.values[GAMEPAD_INPUT_DOWN])
 	{
 		int vol = audio_volume_get() - 1;
-		if (vol < 0)
+		if (vol < 1)
 		{
-			vol = 0;
+			vol = 1;
 		}
 		audio_volume_set(vol);
 
@@ -600,7 +572,7 @@ static void load_settings(PlayerState *state)
 	}
 }
 
-int audio_player(AudioPlayerParam params)
+int app_audio_player(AudioPlayerParam params)
 {
 	event_init();
 	memset(&player_state, 0, sizeof(PlayerState));
@@ -658,6 +630,7 @@ int audio_player(AudioPlayerParam params)
 	keys_locked = false;
 	event_deinit();
 	set_display_brightness(50);
+    vTaskDelay(20);
 
 	return 0;
 }
