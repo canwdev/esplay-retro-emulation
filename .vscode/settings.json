@@ -16,5 +16,5 @@
     "audio_player.h": "c",
     "sdcard.h": "c"
   },
-  "idf.portWin": "COM8"
+  "idf.portWin": "COM12"
 }
