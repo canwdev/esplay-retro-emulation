@@ -10,6 +10,7 @@ void audio_terminate();
 void audio_resume();
 int audio_volume_get();
 void audio_volume_set(int value);
+void audio_amp_init(void);
 void audio_amp_enable();
 void audio_amp_disable();
 

@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "esp_system.h"
 #include "driver/i2s.h"
+#include "esp_err.h"
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
 #include "settings.h"
@@ -35,7 +36,6 @@ void audio_volume_set(int value)
 
 void audio_init(int sample_rate)
 {
-    gpio_set_direction(AMP_SHDN, GPIO_MODE_OUTPUT);
     printf("%s: sample_rate=%d\n", __func__, sample_rate);
 
 
@@ -78,9 +78,13 @@ void audio_submit(short *stereoAudioBuffer, int frameCount)
 {
     if (volumeLevel != 0)
     {
-        short currentAudioSampleCount = frameCount * 2;
+        if (frameCount <= 0 || stereoAudioBuffer == NULL) {
+            return;
+        }
 
-        for (short i = 0; i < currentAudioSampleCount; ++i)
+        int currentAudioSampleCount = frameCount * 2;
+
+        for (int i = 0; i < currentAudioSampleCount; ++i)
         {
             int sample = stereoAudioBuffer[i] * Volume;
             /*
@@ -92,13 +96,13 @@ void audio_submit(short *stereoAudioBuffer, int frameCount)
             stereoAudioBuffer[i] = (short)sample;
         }
 
-        int len = currentAudioSampleCount * sizeof(int16_t);
+        size_t len = (size_t)currentAudioSampleCount * sizeof(int16_t);
         size_t count;
         i2s_write(I2S_NUM, (const char *)stereoAudioBuffer, len, &count, portMAX_DELAY);
         if (count != len)
         {
-            printf("i2s_write_bytes: count (%d) != len (%d)\n", count, len);
-            abort();
+            printf("i2s_write_bytes: count (%u) != len (%u)\n", (unsigned)count, (unsigned)len);
+            return;
         }
     }
 }
@@ -108,14 +112,27 @@ void audio_terminate()
     audio_amp_disable();
     i2s_zero_dma_buffer(I2S_NUM);
     i2s_stop(I2S_NUM);
-
-    i2s_start(I2S_NUM);
+    esp_err_t err = i2s_driver_uninstall(I2S_NUM);
+    if (err != ESP_OK) {
+        printf("%s: i2s_driver_uninstall: %s\n", __func__, esp_err_to_name(err));
+    }
 }
 
 void audio_resume()
 {
     if (volumeLevel != 0)
         audio_amp_enable();
+}
+
+void audio_amp_init(void)
+{
+    /*
+     * AMP_SHDN is GPIO4 on ESPlay, which is also SDMMC DAT1 on ESP32's default slot.
+     * Configure it before mounting SD and never reconfigure it while SDMMC is active;
+     * changing direction/mux after mount can corrupt the SDMMC bus even in 1-bit mode.
+     */
+    gpio_set_direction(AMP_SHDN, GPIO_MODE_OUTPUT);
+    gpio_set_level(AMP_SHDN, 0);
 }
 
 void audio_amp_enable()

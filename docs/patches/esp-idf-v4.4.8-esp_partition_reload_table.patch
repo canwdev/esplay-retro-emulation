@@ -1,0 +1,39 @@
+diff --git a/components/spi_flash/include/esp_partition.h b/components/spi_flash/include/esp_partition.h
+--- a/components/spi_flash/include/esp_partition.h
++++ b/components/spi_flash/include/esp_partition.h
+@@ -431,9 +431,12 @@ esp_err_t esp_partition_register_external(esp_flash_t* flash_chip, size_t offse
+  *      - ESP_ERR_INVALID_ARG if the partition was not registered using
+  *        esp_partition_register_external function.
+  */
+ esp_err_t esp_partition_deregister_external(const esp_partition_t* partition);
+ 
++/** Drop cached partition table so the next access reloads it from flash (non-upstream helper). */
++void esp_partition_reload_table(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/components/spi_flash/partition.c b/components/spi_flash/partition.c
+--- a/components/spi_flash/partition.c
++++ b/components/spi_flash/partition.c
+@@ -609,6 +609,22 @@ bool esp_partition_main_flash_region_safe(size_t addr, size_t size)
+     if (addr < p->address && addr + size > p->address) {
+         return false;
+     }
+     return result;
+ }
++
++void esp_partition_reload_table(void)
++{
++    if (!SLIST_EMPTY(&s_partition_list)) {
++        _lock_acquire(&s_partition_list_lock);
++
++        while (!SLIST_EMPTY(&s_partition_list)) {
++            partition_list_item_t *item = SLIST_FIRST(&s_partition_list);
++            SLIST_REMOVE_HEAD(&s_partition_list, next);
++            free(item);
++        }
++
++        _lock_release(&s_partition_list_lock);
++    }
++}

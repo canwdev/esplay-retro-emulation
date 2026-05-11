@@ -96,6 +96,15 @@ static void print_char_val_type(esp_adc_cal_value_t val_type)
 
 void system_led_set(int state)
 {
+#if LED1 == 13
+    (void)state;
+    /*
+     * GPIO13 is SDMMC DAT3 on ESP32 slot 1. In IDF v4 1-bit mode it is no longer
+     * driven high by the host, so using it as an LED can pull DAT3 low and cause
+     * CRC failures during long SD reads.
+     */
+    return;
+#endif
     gpio_set_level(LED1, state);
 }
 
@@ -172,8 +181,10 @@ static void battery_monitor_task()
 #define DEFAULT_VREF 1100
 void battery_level_init()
 {
+#if LED1 != 13
     PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[LED1], PIN_FUNC_GPIO);
     gpio_set_direction(LED1, GPIO_MODE_OUTPUT);
+#endif
     gpio_set_direction(USB_PLUG_PIN, GPIO_MODE_INPUT);
     gpio_set_pull_mode(USB_PLUG_PIN, GPIO_PULLUP_ONLY);
     gpio_set_direction(CHRG_STATE_PIN, GPIO_MODE_INPUT);

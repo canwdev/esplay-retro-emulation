@@ -1,17 +1,6 @@
 .idea/
 # Build folder
-esplay-launcher/build
-esplay-gnuboy/build
-esplay-nofrendo/build
-esplay-smsplusgx/build
-retro-esp32/build
-
-# Backup sdkconfig
-esplay-launcher/sdkconfig.old
-esplay-gnuboy/sdkconfig.old
-esplay-nofrendo/sdkconfig.old
-esplay-smsplusgx/sdkconfig.old
-retro-esp32/sdkconfig.old
+/build
 
 # Prerequisites
 *.d
