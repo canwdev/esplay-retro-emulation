@@ -7,6 +7,7 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include "appfs.h"
+#include "audio.h"
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -30,7 +31,12 @@
 #include "sdkconfig.h"
 #include "soc/rtc_cntl_reg.h"
 #include "time.h"
+#include <dirent.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static const char *TAG = "launcher";
 
@@ -46,17 +52,84 @@ static const char *TAG = "launcher";
 #endif
 
 LV_IMG_DECLARE(apps);
-LV_IMG_DECLARE(games);
 LV_IMG_DECLARE(settings);
 
-enum { LIST_APP = 0, LIST_GAMES, LIST_SETTINGS };
+enum { LIST_APP = 0, LIST_SETTINGS };
 
 typedef enum {
   PAGE_HOME = 0,
   PAGE_APP,
-  PAGE_GAMES,
-  PAGE_SETTINGS
+  PAGE_FILES,
+  PAGE_SETTINGS,
+  PAGE_MUSIC
 } current_page;
+
+#define MUSIC_DIR "/sd/audio"
+#define MUSIC_MAX_TRACKS 64
+
+static lv_obj_t *music_status_label;
+static lv_timer_t *music_poll_timer;
+
+#define FM_PATH_MAX 256
+#define FM_MAX_ENTRIES 96
+#define FM_NAME_LEN 96
+
+static char fm_cwd[FM_PATH_MAX];
+
+typedef struct {
+  char name[FM_NAME_LEN];
+  bool is_dir;
+} fm_entry_t;
+
+static int fm_entry_compare(const void *a, const void *b) {
+  const fm_entry_t *ea = (const fm_entry_t *)a;
+  const fm_entry_t *eb = (const fm_entry_t *)b;
+  if (ea->is_dir != eb->is_dir)
+    return eb->is_dir - ea->is_dir;
+  return strcasecmp(ea->name, eb->name);
+}
+
+static void fm_normalize_cwd(void) {
+  size_t n = strlen(fm_cwd);
+  while (n > 1 && fm_cwd[n - 1] == '/') {
+    fm_cwd[n - 1] = '\0';
+    n--;
+  }
+}
+
+static bool fm_build_path(char *out, size_t out_sz, const char *name) {
+  if (name[0] == '\0' || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+    return false;
+  if (strchr(name, '/'))
+    return false;
+  int n = snprintf(out, out_sz, "%s/%s", fm_cwd, name);
+  if (n < 0 || (size_t)n >= out_sz)
+    return false;
+  if (strncmp(out, "/sd", 3) != 0)
+    return false;
+  return true;
+}
+
+static void fm_go_parent(void) {
+  fm_normalize_cwd();
+  if (strcmp(fm_cwd, "/sd") == 0)
+    return;
+  char *slash = strrchr(fm_cwd, '/');
+  if (slash && slash != fm_cwd)
+    *slash = '\0';
+  else
+    strlcpy(fm_cwd, "/sd", sizeof(fm_cwd));
+  fm_normalize_cwd();
+  if (strlen(fm_cwd) < 3)
+    strlcpy(fm_cwd, "/sd", sizeof(fm_cwd));
+}
+
+static const char *fm_base_name(const char *path) {
+  const char *p = strrchr(path, '/');
+  return p ? p + 1 : path;
+}
+
+static char fm_delete_path[FM_PATH_MAX];
 
 typedef struct {
   lv_group_t *input_group;
@@ -73,7 +146,9 @@ typedef struct {
 
 static esp_lcd_panel_handle_t panel_handle;
 static ui_state_t ui_state = {0};
-static void lv_create_homescreen();
+static void lv_create_homescreen(void);
+static void lv_create_file_manager(void);
+static void lv_create_music_screen(void);
 
 static void lv_create_list(int type);
 
@@ -84,6 +159,379 @@ static void run_main_loop(void);
 #define LVGL_TICK_PERIOD_MS 2
 #define REMOVE_FROM_GROUP 0
 #define ADD_TO_GROUP 1
+
+static void fm_mbox_closed_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_DELETE)
+    return;
+  lv_create_file_manager();
+}
+
+static void fm_delete_cancel_cb(lv_event_t *e) {
+  lv_obj_t *mbox = lv_event_get_user_data(e);
+  if (mbox)
+    lv_msgbox_close(mbox);
+}
+
+static void fm_delete_confirm_cb(lv_event_t *e) {
+  lv_obj_t *mbox = lv_event_get_user_data(e);
+  unlink(fm_delete_path);
+  if (mbox)
+    lv_msgbox_close(mbox);
+}
+
+static void fm_prompt_delete(const char *fullpath) {
+  strlcpy(fm_delete_path, fullpath, sizeof(fm_delete_path));
+
+  lv_obj_t *mbox = lv_msgbox_create(NULL);
+  lv_msgbox_add_title(mbox, LV_SYMBOL_TRASH " Delete");
+  lv_msgbox_add_text(mbox, fm_base_name(fullpath));
+  lv_obj_t *btn_cancel = lv_msgbox_add_footer_button(mbox, "Cancel");
+  lv_obj_t *btn_ok = lv_msgbox_add_footer_button(mbox, "Delete");
+  lv_obj_add_event_cb(btn_cancel, fm_delete_cancel_cb, LV_EVENT_CLICKED, mbox);
+  lv_obj_add_event_cb(btn_ok, fm_delete_confirm_cb, LV_EVENT_CLICKED, mbox);
+  lv_obj_add_event_cb(mbox, fm_mbox_closed_cb, LV_EVENT_DELETE, NULL);
+
+  lv_group_remove_all_objs(ui_state.input_group);
+  lv_group_add_obj(ui_state.input_group, btn_cancel);
+  lv_group_add_obj(ui_state.input_group, btn_ok);
+  lv_obj_center(mbox);
+}
+
+static void file_manager_event_handler(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  lv_obj_t *obj = lv_event_get_target(e);
+
+  if (code == LV_EVENT_KEY) {
+    uint32_t key = lv_indev_get_key(lv_indev_get_act());
+    if (key == LV_KEY_DOWN)
+      lv_group_focus_next(lv_group_get_default());
+    else if (key == LV_KEY_UP)
+      lv_group_focus_prev(lv_group_get_default());
+    return;
+  }
+
+  if (code != LV_EVENT_CLICKED)
+    return;
+
+  lv_obj_t *label = NULL;
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(obj); i++) {
+    lv_obj_t *child = lv_obj_get_child(obj, i);
+    if (lv_obj_check_type(child, &lv_label_class)) {
+      label = child;
+      break;
+    }
+  }
+  if (!label)
+    return;
+
+  const char *name = lv_label_get_text(label);
+  if (strcmp(name, "Back") == 0) {
+    lv_create_homescreen();
+    return;
+  }
+  if (strcmp(name, "..") == 0) {
+    fm_go_parent();
+    lv_create_file_manager();
+    return;
+  }
+
+  char full[FM_PATH_MAX];
+  if (!fm_build_path(full, sizeof(full), name))
+    return;
+
+  struct stat st;
+  if (stat(full, &st) != 0) {
+    ESP_LOGW(TAG, "stat failed for %s", full);
+    return;
+  }
+
+  if (S_ISDIR(st.st_mode)) {
+    strlcpy(fm_cwd, full, sizeof(fm_cwd));
+    fm_normalize_cwd();
+    lv_create_file_manager();
+    return;
+  }
+
+  if (S_ISREG(st.st_mode))
+    fm_prompt_delete(full);
+}
+
+static void lv_create_file_manager(void) {
+  if (!ui_state.input_group || !ui_state.screen) {
+    ESP_LOGE(TAG, "UI state not initialized");
+    return;
+  }
+
+  fm_normalize_cwd();
+
+  lv_group_remove_all_objs(ui_state.input_group);
+  lv_obj_clean(ui_state.screen);
+
+  lv_obj_t *title = lv_label_create(ui_state.screen);
+  lv_label_set_text(title, "Files");
+  lv_obj_set_style_text_color(title, lv_palette_lighten(LV_PALETTE_GREY, 5), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+
+  lv_obj_t *path_label = lv_label_create(ui_state.screen);
+  lv_label_set_long_mode(path_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+  lv_obj_set_width(path_label, 290);
+  lv_label_set_text(path_label, fm_cwd);
+  lv_obj_set_style_text_color(path_label, lv_palette_lighten(LV_PALETTE_GREY, 5), 0);
+  lv_obj_align(path_label, LV_ALIGN_TOP_MID, 0, 16);
+
+  lv_obj_t *list = lv_list_create(ui_state.screen);
+  lv_obj_set_size(list, 300, 188);
+  lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 38);
+
+  lv_obj_t *btn_back = lv_list_add_btn(list, LV_SYMBOL_LEFT, "Back");
+  lv_obj_add_event_cb(btn_back, file_manager_event_handler, LV_EVENT_ALL, NULL);
+
+  bool not_root = (strcmp(fm_cwd, "/sd") != 0);
+  int focus_count = 0;
+
+  if (not_root) {
+    lv_obj_t *btn_up = lv_list_add_btn(list, LV_SYMBOL_LEFT, "..");
+    lv_obj_add_event_cb(btn_up, file_manager_event_handler, LV_EVENT_ALL, NULL);
+    lv_group_focus_obj(btn_up);
+    focus_count++;
+  }
+
+  DIR *dir = opendir(fm_cwd);
+  if (!dir) {
+    ESP_LOGW(TAG, "opendir failed: %s", fm_cwd);
+    lv_obj_t *err = lv_list_add_btn(list, LV_SYMBOL_WARNING, "(open error)");
+    lv_obj_add_event_cb(err, file_manager_event_handler, LV_EVENT_ALL, NULL);
+    if (focus_count == 0)
+      lv_group_focus_obj(btn_back);
+    ui_state.current_page = PAGE_FILES;
+    return;
+  }
+
+  /* Static: ~9KB — stack on main task (default 8KB) overflows if local. */
+  static fm_entry_t entries[FM_MAX_ENTRIES];
+  size_t n = 0;
+  struct dirent *de;
+  while ((de = readdir(dir)) != NULL && n < FM_MAX_ENTRIES) {
+    if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+      continue;
+    strlcpy(entries[n].name, de->d_name, FM_NAME_LEN);
+
+    if (de->d_type == DT_DIR) {
+      entries[n].is_dir = true;
+    } else if (de->d_type == DT_REG) {
+      entries[n].is_dir = false;
+    } else if (de->d_type == DT_UNKNOWN) {
+      char probe[FM_PATH_MAX];
+      if (!fm_build_path(probe, sizeof(probe), de->d_name)) {
+        continue;
+      }
+      struct stat ost;
+      if (stat(probe, &ost) != 0)
+        continue;
+      if (S_ISDIR(ost.st_mode))
+        entries[n].is_dir = true;
+      else if (S_ISREG(ost.st_mode))
+        entries[n].is_dir = false;
+      else
+        continue;
+    } else {
+      continue;
+    }
+    n++;
+  }
+  closedir(dir);
+
+  qsort(entries, n, sizeof(entries[0]), fm_entry_compare);
+
+  for (size_t i = 0; i < n; i++) {
+    const char *sym =
+        entries[i].is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_FILE;
+    lv_obj_t *row = lv_list_add_btn(list, sym, entries[i].name);
+    lv_obj_add_event_cb(row, file_manager_event_handler, LV_EVENT_ALL, NULL);
+    if (focus_count == 0)
+      lv_group_focus_obj(row);
+    focus_count++;
+  }
+
+  if (focus_count == 0)
+    lv_group_focus_obj(btn_back);
+
+  ui_state.current_page = PAGE_FILES;
+}
+
+static int music_row_compare(const void *a, const void *b) {
+  return strcasecmp((const char *)a, (const char *)b);
+}
+
+static bool music_is_wav_filename(const char *name) {
+  const char *dot = strrchr(name, '.');
+  return dot != NULL && strcasecmp(dot, ".wav") == 0;
+}
+
+/** Build "/sd/audio/<name>" without snprintf (avoids -Wformat-truncation). */
+static bool music_join_sd_path(char *out, size_t out_sz, const char *name) {
+  if (!name || name[0] == '\0' || strchr(name, '/'))
+    return false;
+  if (strlcpy(out, MUSIC_DIR, out_sz) >= out_sz)
+    return false;
+  if (strlcat(out, "/", out_sz) >= out_sz)
+    return false;
+  if (strlcat(out, name, out_sz) >= out_sz)
+    return false;
+  return true;
+}
+
+static void music_poll_timer_cb(lv_timer_t *t) {
+  (void)t;
+  if (!music_status_label || ui_state.current_page != PAGE_MUSIC)
+    return;
+  if (audio_is_playing()) {
+    input_gamepad_state gp;
+    gamepad_read(&gp);
+    if (gp.values[GAMEPAD_INPUT_B])
+      audio_stop_playback();
+    lv_label_set_text(music_status_label,
+                      LV_SYMBOL_PLAY " Playing...  B: stop");
+  } else {
+    lv_label_set_text(music_status_label,
+                      LV_SYMBOL_AUDIO " PCM .wav  B: stop while playing");
+  }
+}
+
+static void music_list_event_handler(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  lv_obj_t *obj = lv_event_get_target(e);
+
+  if (code == LV_EVENT_KEY) {
+    uint32_t key = lv_indev_get_key(lv_indev_get_act());
+    if (key == LV_KEY_DOWN)
+      lv_group_focus_next(lv_group_get_default());
+    else if (key == LV_KEY_UP)
+      lv_group_focus_prev(lv_group_get_default());
+    return;
+  }
+
+  if (code != LV_EVENT_CLICKED)
+    return;
+
+  lv_obj_t *label = NULL;
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(obj); i++) {
+    lv_obj_t *child = lv_obj_get_child(obj, i);
+    if (lv_obj_check_type(child, &lv_label_class)) {
+      label = child;
+      break;
+    }
+  }
+  if (!label)
+    return;
+
+  const char *name = lv_label_get_text(label);
+  if (strcmp(name, "Back") == 0) {
+    audio_stop_playback();
+    if (music_poll_timer) {
+      lv_timer_delete(music_poll_timer);
+      music_poll_timer = NULL;
+    }
+    music_status_label = NULL;
+    lv_create_list(LIST_SETTINGS);
+    return;
+  }
+
+  char path[FM_PATH_MAX];
+  if (!music_join_sd_path(path, sizeof(path), name))
+    return;
+  audio_play_wav_async(path);
+}
+
+static void lv_create_music_screen(void) {
+  if (!ui_state.input_group || !ui_state.screen) {
+    ESP_LOGE(TAG, "UI state not initialized");
+    return;
+  }
+
+  audio_stop_playback();
+  if (music_poll_timer) {
+    lv_timer_delete(music_poll_timer);
+    music_poll_timer = NULL;
+  }
+
+  lv_group_remove_all_objs(ui_state.input_group);
+  lv_obj_clean(ui_state.screen);
+
+  lv_obj_t *title = lv_label_create(ui_state.screen);
+  lv_label_set_text(title, "Music");
+  lv_obj_set_style_text_color(title, lv_palette_lighten(LV_PALETTE_GREY, 5), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+
+  lv_obj_t *hint = lv_label_create(ui_state.screen);
+  lv_label_set_text_fmt(hint, "%s", MUSIC_DIR);
+  lv_label_set_long_mode(hint, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+  lv_obj_set_width(hint, 290);
+  lv_obj_set_style_text_color(hint, lv_palette_lighten(LV_PALETTE_GREY, 5), 0);
+  lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 16);
+
+  lv_obj_t *list = lv_list_create(ui_state.screen);
+  lv_obj_set_size(list, 300, 142);
+  lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 38);
+
+  lv_obj_t *btn_back = lv_list_add_btn(list, LV_SYMBOL_LEFT, "Back");
+  lv_obj_add_event_cb(btn_back, music_list_event_handler, LV_EVENT_ALL, NULL);
+
+  /* Static: ~6KB — avoid main stack overflow with LVGL call depth. */
+  static char names[MUSIC_MAX_TRACKS][FM_NAME_LEN];
+  size_t n = 0;
+
+  DIR *dir = opendir(MUSIC_DIR);
+  if (dir) {
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL && n < MUSIC_MAX_TRACKS) {
+      if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+        continue;
+      if (!music_is_wav_filename(de->d_name))
+        continue;
+      if (de->d_type != DT_REG && de->d_type != DT_UNKNOWN)
+        continue;
+      if (de->d_type == DT_UNKNOWN) {
+        char probe[FM_PATH_MAX];
+        if (!music_join_sd_path(probe, sizeof(probe), de->d_name))
+          continue;
+        struct stat ost;
+        if (stat(probe, &ost) != 0 || !S_ISREG(ost.st_mode))
+          continue;
+      }
+      strlcpy(names[n], de->d_name, FM_NAME_LEN);
+      n++;
+    }
+    closedir(dir);
+    qsort(names, n, sizeof(names[0]), music_row_compare);
+  } else {
+    ESP_LOGW(TAG, "opendir %s failed", MUSIC_DIR);
+  }
+
+  lv_obj_t *focus_btn = btn_back;
+  for (size_t i = 0; i < n; i++) {
+    lv_obj_t *row = lv_list_add_btn(list, LV_SYMBOL_AUDIO, names[i]);
+    lv_obj_add_event_cb(row, music_list_event_handler, LV_EVENT_ALL, NULL);
+    if (i == 0)
+      focus_btn = row;
+  }
+
+  music_status_label = lv_label_create(ui_state.screen);
+  lv_label_set_long_mode(music_status_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+  lv_obj_set_width(music_status_label, 300);
+  lv_label_set_text(music_status_label,
+                    LV_SYMBOL_AUDIO " PCM .wav  B: stop while playing");
+  lv_obj_set_style_text_color(music_status_label,
+                              lv_palette_lighten(LV_PALETTE_GREY, 5), 0);
+  lv_obj_align(music_status_label, LV_ALIGN_BOTTOM_MID, 0, -6);
+
+  lv_group_focus_obj(focus_btn);
+
+  music_poll_timer = lv_timer_create(music_poll_timer_cb, 80, NULL);
+  lv_timer_set_repeat_count(music_poll_timer, -1);
+
+  ui_state.current_page = PAGE_MUSIC;
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data) {
@@ -362,6 +810,8 @@ static void list_items_event_handler(lv_event_t *e) {
 
     if (strcmp(name, "Back") == 0)
       lv_create_homescreen();
+    else if (strcmp(name, "Music") == 0)
+      lv_create_music_screen();
     else if (strcmp(name, "Storage") == 0)
       lv_show_storage();
     else if (strcmp(name, "Battery") == 0)
@@ -455,6 +905,7 @@ static void lv_add_setting_list(lv_obj_t *list) {
   esplay_settings_t set_list[] = {// {LV_SYMBOL_WIFI, "Wifi"},
                                   // {LV_SYMBOL_VOLUME_MAX, "Volume"},
                                   {LV_SYMBOL_SD_CARD, "Storage"},
+                                  {LV_SYMBOL_AUDIO, "Music"},
                                   {LV_SYMBOL_BATTERY_2, "Battery"},
                                   {LV_SYMBOL_SETTINGS, "About"}};
 
@@ -470,9 +921,6 @@ static void lv_populate_list_items(lv_obj_t *list, int type) {
   switch (type) {
   case LIST_APP:
     lv_add_file_list(list, "*.app");
-    break;
-  case LIST_GAMES:
-    lv_add_file_list(list, "*.emu,*.game");
     break;
   case LIST_SETTINGS:
     lv_add_setting_list(list);
@@ -501,7 +949,7 @@ static void btn_event_handler(lv_event_t *e) {
     if (obj == ui_state.home_btn1)
       lv_label_set_text(ui_state.menu_selected_label, "Application");
     else if (obj == ui_state.home_btn2)
-      lv_label_set_text(ui_state.menu_selected_label, "Games");
+      lv_label_set_text(ui_state.menu_selected_label, "Files");
     else if (obj == ui_state.home_btn3)
       lv_label_set_text(ui_state.menu_selected_label, "Settings");
     else
@@ -510,7 +958,9 @@ static void btn_event_handler(lv_event_t *e) {
     if (obj == ui_state.home_btn1) {
       lv_create_list(LIST_APP);
     } else if (obj == ui_state.home_btn2) {
-      lv_create_list(LIST_GAMES);
+      strlcpy(fm_cwd, "/sd", sizeof(fm_cwd));
+      fm_normalize_cwd();
+      lv_create_file_manager();
     } else if (obj == ui_state.home_btn3) {
       lv_create_list(LIST_SETTINGS);
     }
@@ -540,11 +990,6 @@ static void lv_create_list(int type) {
     lv_populate_list_items(list, type);
     ui_state.current_page = PAGE_APP;
     break;
-  case LIST_GAMES:
-    lv_label_set_text(title, "Games");
-    lv_populate_list_items(list, type);
-    ui_state.current_page = PAGE_GAMES;
-    break;
   case LIST_SETTINGS:
     lv_label_set_text(title, "Settings");
     lv_populate_list_items(list, type);
@@ -573,6 +1018,8 @@ static void init_system_components(void) {
   ESP_LOGI(TAG, "Initializing AppFS");
   ESP_ERROR_CHECK(appfsInit(0x43, 3));
   ESP_LOGI(TAG, "AppFS initialized");
+
+  audio_init();
 }
 
 static void init_lvgl_display(void) {
@@ -621,6 +1068,10 @@ static void init_lvgl_display(void) {
 
 static void init_ui(void) {
   sdcard_open("/sd");
+  struct stat st_mus;
+  if (stat(MUSIC_DIR, &st_mus) != 0)
+    mkdir(MUSIC_DIR, 0777);
+
   ESP_LOGI(TAG, "ESP_WIFI_MODE_AP");
   wifi_init_softap();
   ESP_ERROR_CHECK(start_file_server("/sd"));
@@ -717,6 +1168,53 @@ static lv_obj_t *create_home_button(lv_obj_t *parent,
   return btn;
 }
 
+static lv_obj_t *create_home_symbol_button(lv_obj_t *parent, const char *symbol,
+                                           lv_align_t align, int x_ofs,
+                                           int y_ofs) {
+  lv_obj_t *btn = lv_btn_create(parent);
+  if (!btn)
+    return NULL;
+
+  lv_obj_t *lbl = lv_label_create(btn);
+  lv_label_set_text(lbl, symbol);
+  lv_obj_center(lbl);
+
+  static lv_style_t sym_style_def;
+  static bool sym_style_inited = false;
+  if (!sym_style_inited) {
+    lv_style_init(&sym_style_def);
+    lv_style_set_radius(&sym_style_def, 3);
+    lv_style_set_bg_opa(&sym_style_def, LV_OPA_20);
+    lv_style_set_bg_color(&sym_style_def, lv_palette_main(LV_PALETTE_BLUE));
+    lv_style_set_bg_grad_color(&sym_style_def,
+                               lv_palette_darken(LV_PALETTE_BLUE, 2));
+    lv_style_set_bg_grad_dir(&sym_style_def, LV_GRAD_DIR_VER);
+    lv_style_set_border_opa(&sym_style_def, LV_OPA_40);
+    lv_style_set_border_width(&sym_style_def, 2);
+    lv_style_set_border_color(&sym_style_def, lv_palette_main(LV_PALETTE_GREY));
+    lv_style_set_shadow_width(&sym_style_def, 8);
+    lv_style_set_shadow_color(&sym_style_def, lv_palette_main(LV_PALETTE_GREY));
+    lv_style_set_shadow_ofs_y(&sym_style_def, 8);
+    lv_style_set_outline_opa(&sym_style_def, LV_OPA_COVER);
+    lv_style_set_outline_color(&sym_style_def, lv_palette_main(LV_PALETTE_BLUE));
+    lv_style_set_text_color(&sym_style_def, lv_color_white());
+    lv_style_set_pad_all(&sym_style_def, 10);
+    sym_style_inited = true;
+  }
+
+  lv_obj_add_style(btn, &sym_style_def, 0);
+  lv_obj_set_style_bg_opa(btn, LV_OPA_60, LV_STATE_FOCUSED);
+  lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_YELLOW),
+                            LV_STATE_FOCUSED);
+  lv_obj_set_style_bg_grad_color(btn, lv_palette_darken(LV_PALETTE_YELLOW, 2),
+                                 LV_STATE_FOCUSED);
+  lv_obj_set_size(btn, 80, 80);
+  lv_obj_align(btn, align, x_ofs, y_ofs);
+  lv_obj_add_event_cb(btn, btn_event_handler, LV_EVENT_ALL, NULL);
+
+  return btn;
+}
+
 static void lv_create_homescreen() {
   if (!ui_state.input_group || !ui_state.screen) {
     ESP_LOGE(TAG, "UI state not initialized");
@@ -760,8 +1258,9 @@ static void lv_create_homescreen() {
 
   ui_state.home_btn1 =
       create_home_button(ui_state.screen, &apps, LV_ALIGN_LEFT_MID, 10, 0);
-  ui_state.home_btn2 =
-      create_home_button(ui_state.screen, &games, LV_ALIGN_CENTER, 0, 0);
+  ui_state.home_btn2 = create_home_symbol_button(
+      ui_state.screen, LV_SYMBOL_SD_CARD "\n" LV_SYMBOL_LIST,
+      LV_ALIGN_CENTER, 0, 0);
   ui_state.home_btn3 = create_home_button(ui_state.screen, &settings,
                                           LV_ALIGN_RIGHT_MID, -10, 0);
 

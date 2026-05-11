@@ -38,3 +38,32 @@ config HW_LCD_TYPE
 	default 1 if HW_LCD_TYPE_ILI9342
 
 endmenu
+
+menu "Audio I2S speaker"
+
+config AUDIO_I2S_BCLK_GPIO
+	int "I2S bit clock (BCLK) GPIO"
+	default 26
+	range 0 39
+
+config AUDIO_I2S_WS_GPIO
+	int "I2S word select (LRCK/WS) GPIO"
+	default 25
+	range 0 39
+
+config AUDIO_I2S_DOUT_GPIO
+	int "I2S data out (DOUT) GPIO"
+	default 19
+	range 0 39
+	help
+	  ESPlay Micro (UDA1334): ESP32 IO19 → DAC DIN. Change if your wiring differs.
+
+config AUDIO_AMP_GPIO
+	int "Internal speaker amp enable GPIO (-1 = none)"
+	default 4
+	range -1 39
+	help
+	  Legacy ESPlay / ESPlay Micro (see esplay-hal pin_definitions): GPIO 4 high enables
+	  PAM8403 (external speaker). Headphones work without this. Use -1 if your board has no SHDN line.
+
+endmenu

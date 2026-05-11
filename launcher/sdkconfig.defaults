@@ -1,0 +1,7 @@
+# ESPlay Micro (pebri86/esplay_micro_hardware): BCK=IO26, WS(LCK)=IO25, DIN=IO19.
+# DOUT must match I2S DIN on the DAC (GPIO 4 is wrong for stock ESPlay Micro → no audio).
+CONFIG_AUDIO_I2S_BCLK_GPIO=26
+CONFIG_AUDIO_I2S_WS_GPIO=25
+CONFIG_AUDIO_I2S_DOUT_GPIO=19
+# GPIO 4 = AMP_SHDN on stock ESPlay Micro / ESPlay 2.0 (esplay-hal); high = speaker on.
+CONFIG_AUDIO_AMP_GPIO=4
