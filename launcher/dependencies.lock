@@ -6,7 +6,7 @@ dependencies:
       require: private
       version: '>=4.1'
     source:
-      registry_url: https://components.espressif.com/
+      registry_url: https://components.espressif.com
       type: service
     version: 0.5.3
   espressif/esp_lcd_ili9341:
@@ -35,10 +35,8 @@ dependencies:
       type: service
     version: 9.4.0
 direct_dependencies:
-- espressif/cmake_utilities
 - espressif/esp_lcd_ili9341
-- idf
 - lvgl/lvgl
-manifest_hash: 577130fc73a980c8eb98f544d29e53c40f9b09872fedd26538c20a9de1dbb38f
+manifest_hash: af856e46353949b7314f6986fefc5a8860ab9d2f6149d4284b7521bde9528741
 target: esp32
 version: 2.0.0

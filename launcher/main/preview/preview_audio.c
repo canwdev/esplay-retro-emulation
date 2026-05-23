@@ -1,0 +1,449 @@
+#include "preview_audio.h"
+#include "audio.h"
+#include "file_manager.h"
+#include "lcd.h"
+#include "settings.h"
+#include "ui_theme.h"
+#include <dirent.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+
+#define AUDIO_PLAYLIST_MAX 96
+#define AUDIO_PATH_MAX     256
+
+typedef enum {
+  PLAY_MODE_LIST_LOOP = 0, /* wrap around at end of list  (default) */
+  PLAY_MODE_SINGLE_LOOP,   /* replay the same track forever          */
+  PLAY_MODE_LIST_PLAY,     /* play to last track then stop           */
+  PLAY_MODE_COUNT,
+} play_mode_t;
+
+static char s_playlist[AUDIO_PLAYLIST_MAX][FM_NAME_LEN];
+static int  s_playlist_count;
+static int  s_current_index;
+static char s_current_path[AUDIO_PATH_MAX];
+static bool s_active;
+
+static lv_obj_t *s_title_label;
+static lv_obj_t *s_track_label;
+static lv_obj_t *s_time_label;
+static lv_obj_t *s_status_label;
+static lv_obj_t *s_progress_bar;
+static lv_obj_t *s_vol_bar;
+static lv_obj_t *s_vol_pct_label;
+static lv_obj_t *s_mode_label;
+static uint32_t  s_last_ui_ms;
+static uint8_t   s_last_vol;
+static int       s_last_progress;
+static uint32_t  s_last_pos_sec;
+static uint32_t  s_last_dur_sec;
+static bool      s_last_paused;
+static bool      s_last_playing;
+static int       s_last_track_index;
+static int       s_last_track_count;
+static bool      s_backlight_off;
+static uint8_t   s_backlight_restore;
+static play_mode_t s_play_mode;
+/* Set true once the current track is confirmed playing; cleared on track end
+ * or when a new track is started, to gate auto-advance triggering. */
+static bool s_track_confirmed_playing;
+
+/* ------------------------------------------------------------------ helpers */
+
+static const char *play_mode_text(play_mode_t m) {
+  switch (m) {
+    case PLAY_MODE_LIST_LOOP:   return LV_SYMBOL_LOOP " All";
+    case PLAY_MODE_SINGLE_LOOP: return LV_SYMBOL_LOOP " x1";
+    case PLAY_MODE_LIST_PLAY:   return LV_SYMBOL_NEXT " Seq";
+    default: return "";
+  }
+}
+
+static void update_mode_label(void) {
+  if (!s_mode_label || !lv_obj_is_valid(s_mode_label))
+    return;
+  lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
+}
+
+/* ------------------------------------------------------------------ can_open */
+
+static bool preview_audio_can_open(const char *path) {
+  return fm_is_playable_audio_filename(fm_base_name(path));
+}
+
+/* ------------------------------------------------------------------ playlist */
+
+static void preview_audio_build_playlist(const char *cwd, const char *current) {
+  s_playlist_count = 0;
+  s_current_index  = 0;
+
+  DIR *dir = opendir(cwd);
+  if (!dir)
+    return;
+
+  static fm_entry_t entries[FM_MAX_ENTRIES];
+  size_t       n = 0;
+  struct dirent *de;
+  while ((de = readdir(dir)) != NULL && n < FM_MAX_ENTRIES) {
+    if (de->d_type != DT_REG && de->d_type != DT_UNKNOWN)
+      continue;
+    if (!fm_is_playable_audio_filename(de->d_name))
+      continue;
+    strlcpy(entries[n].name, de->d_name, FM_NAME_LEN);
+    entries[n].is_dir = false;
+    n++;
+  }
+  closedir(dir);
+
+  qsort(entries, n, sizeof(entries[0]), fm_entry_compare);
+
+  for (size_t i = 0; i < n && s_playlist_count < AUDIO_PLAYLIST_MAX; i++) {
+    strlcpy(s_playlist[s_playlist_count], entries[i].name, FM_NAME_LEN);
+    if (strcasecmp(entries[i].name, fm_base_name(current)) == 0)
+      s_current_index = s_playlist_count;
+    s_playlist_count++;
+  }
+}
+
+/* ------------------------------------------------------------------ UI update */
+
+static void preview_audio_update_ui(bool force) {
+  if (!s_active)
+    return;
+  /* No point updating widgets the user cannot see. */
+  if (s_backlight_off)
+    return;
+  if (!s_progress_bar || !s_vol_bar || !s_time_label || !s_status_label)
+    return;
+  if (!lv_obj_is_valid(s_progress_bar) || !lv_obj_is_valid(s_vol_bar) ||
+      !lv_obj_is_valid(s_time_label) || !lv_obj_is_valid(s_status_label))
+    return;
+  if (!force) {
+    uint32_t now = lv_tick_get();
+    if ((now - s_last_ui_ms) < 250)
+      return;
+    s_last_ui_ms = now;
+  } else {
+    s_last_ui_ms = lv_tick_get();
+  }
+
+  uint32_t pos = audio_get_position_ms();
+  uint32_t dur = audio_get_duration_ms();
+  if (dur == 0)
+    dur = 1;
+
+  int progress = (int32_t)(pos * 100 / dur);
+  if (force || progress != s_last_progress) {
+    lv_bar_set_value(s_progress_bar, progress, LV_ANIM_OFF);
+    s_last_progress = progress;
+  }
+
+  uint8_t vol         = audio_get_volume();
+  bool    vol_changed = force || vol != s_last_vol;
+  if (vol_changed) {
+    lv_bar_set_value(s_vol_bar, vol, LV_ANIM_OFF);
+    s_last_vol = vol;
+  }
+  if (vol_changed && s_vol_pct_label && lv_obj_is_valid(s_vol_pct_label))
+    lv_label_set_text_fmt(s_vol_pct_label, "%u%%", vol);
+
+  uint32_t pos_sec = pos / 1000;
+  uint32_t dur_sec = dur / 1000;
+  if (force || pos_sec != s_last_pos_sec || dur_sec != s_last_dur_sec) {
+    lv_label_set_text_fmt(s_time_label, "%lu:%02lu / %lu:%02lu",
+                          (unsigned long)(pos_sec / 60),
+                          (unsigned long)(pos_sec % 60),
+                          (unsigned long)(dur_sec / 60),
+                          (unsigned long)(dur_sec % 60));
+    s_last_pos_sec = pos_sec;
+    s_last_dur_sec = dur_sec;
+  }
+
+  if (s_track_label && lv_obj_is_valid(s_track_label) && s_playlist_count > 0)
+    if (force || s_last_track_index != s_current_index ||
+        s_last_track_count != s_playlist_count) {
+      lv_label_set_text_fmt(s_track_label, "%d / %d", s_current_index + 1,
+                            s_playlist_count);
+      s_last_track_index = s_current_index;
+      s_last_track_count = s_playlist_count;
+    }
+
+  bool paused  = audio_is_paused();
+  bool playing = audio_is_playing();
+  if (force || paused != s_last_paused || playing != s_last_playing) {
+    if (paused)
+      lv_label_set_text(s_status_label, LV_SYMBOL_PAUSE " Pause");
+    else if (playing)
+      lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
+    else
+      lv_label_set_text(s_status_label, LV_SYMBOL_STOP " Stop");
+    s_last_paused  = paused;
+    s_last_playing = playing;
+  }
+}
+
+/* ------------------------------------------------------------------ playback */
+
+static void preview_audio_start_track(const char *path) {
+  strlcpy(s_current_path, path, sizeof(s_current_path));
+  s_track_confirmed_playing = false;
+  audio_play_file_async(path);
+  if (s_title_label)
+    lv_label_set_text(s_title_label, fm_base_name(path));
+  preview_audio_update_ui(true);
+}
+
+static void preview_audio_play_index(int idx) {
+  if (s_playlist_count == 0)
+    return;
+  while (idx < 0)
+    idx += s_playlist_count;
+  idx %= s_playlist_count;
+  s_current_index = idx;
+
+  char full[AUDIO_PATH_MAX];
+  snprintf(full, sizeof(full), "%s/%s", fm_get_cwd(),
+           s_playlist[s_current_index]);
+  preview_audio_start_track(full);
+}
+
+/* ------------------------------------------------------------------ open */
+
+static bool preview_audio_open(const char *path, preview_open_args_t *args) {
+  preview_audio_build_playlist(args->cwd, path);
+
+  lv_obj_clean(args->screen);
+  ui_theme_apply_screen(args->screen);
+
+  /* ---- info card ---- */
+  lv_obj_t *card = lv_obj_create(args->screen);
+  lv_obj_remove_style_all(card);
+  ui_theme_style_panel(card);
+  lv_obj_set_size(card, 308, 118);
+  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_all(card, 8, 0);
+  lv_obj_set_style_pad_row(card, 4, 0);
+
+  s_title_label = lv_label_create(card);
+  lv_label_set_long_mode(s_title_label, LV_LABEL_LONG_MODE_DOTS);
+  lv_obj_set_width(s_title_label, 288);
+  lv_label_set_text(s_title_label, fm_base_name(path));
+  ui_theme_style_label_accent(s_title_label);
+
+  s_status_label = lv_label_create(card);
+  lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
+  ui_theme_style_label_primary(s_status_label);
+
+  s_track_label = lv_label_create(card);
+  lv_label_set_text(s_track_label, "1 / 1");
+  ui_theme_style_label_secondary(s_track_label);
+
+  s_mode_label = lv_label_create(card);
+  lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
+  ui_theme_style_label_secondary(s_mode_label);
+
+  /* ---- time / progress / volume ---- */
+  s_time_label = lv_label_create(args->screen);
+  lv_label_set_text(s_time_label, "0:00 / 0:00");
+  ui_theme_style_label_secondary(s_time_label);
+  lv_obj_align(s_time_label, LV_ALIGN_BOTTOM_LEFT, 8, -50);
+
+  s_progress_bar = lv_bar_create(args->screen);
+  lv_obj_set_size(s_progress_bar, 308, 10);
+  lv_bar_set_range(s_progress_bar, 0, 100);
+  ui_theme_style_bar(s_progress_bar);
+  lv_obj_align(s_progress_bar, LV_ALIGN_BOTTOM_MID, 0, -34);
+
+  lv_obj_t *vol_row = lv_obj_create(args->screen);
+  lv_obj_remove_style_all(vol_row);
+  lv_obj_set_size(vol_row, 308, 22);
+  lv_obj_align(vol_row, LV_ALIGN_BOTTOM_MID, 0, -8);
+  lv_obj_set_flex_flow(vol_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(vol_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(vol_row, 6, 0);
+
+  lv_obj_t *vol_lbl = lv_label_create(vol_row);
+  lv_label_set_text(vol_lbl, LV_SYMBOL_VOLUME_MAX);
+  ui_theme_style_label_accent(vol_lbl);
+
+  s_vol_bar = lv_bar_create(vol_row);
+  lv_obj_set_size(s_vol_bar, 210, 10);
+  lv_bar_set_range(s_vol_bar, 0, 100);
+  ui_theme_style_bar(s_vol_bar);
+  lv_obj_set_flex_grow(s_vol_bar, 1);
+
+  s_vol_pct_label = lv_label_create(vol_row);
+  lv_label_set_text(s_vol_pct_label, "50%");
+  ui_theme_style_label_secondary(s_vol_pct_label);
+  lv_obj_set_width(s_vol_pct_label, 42);
+
+  /* ---- state init ---- */
+  s_active          = true;
+  s_last_ui_ms      = 0;
+  s_last_vol        = 0xFF;
+  s_last_progress   = -1;
+  s_last_pos_sec    = UINT32_MAX;
+  s_last_dur_sec    = UINT32_MAX;
+  s_last_paused     = false;
+  s_last_playing    = false;
+  s_last_track_index = -1;
+  s_last_track_count = -1;
+  s_backlight_off   = false;
+  s_backlight_restore = 70;
+  s_track_confirmed_playing = false;
+
+  int32_t saved_bl = 70;
+  if (settings_load(SettingBacklight, &saved_bl) == 0) {
+    if (saved_bl < 10) saved_bl = 10;
+    if (saved_bl > 100) saved_bl = 100;
+    s_backlight_restore = (uint8_t)saved_bl;
+  }
+  preview_audio_start_track(path);
+
+  return true;
+}
+
+/* ------------------------------------------------------------------ close */
+
+static void preview_audio_close(void) {
+  if (s_backlight_off) {
+    lcd_set_brightness(s_backlight_restore);
+    s_backlight_off = false;
+  }
+  audio_stop_playback();
+  s_active        = false;
+  s_title_label   = NULL;
+  s_track_label   = NULL;
+  s_time_label    = NULL;
+  s_status_label  = NULL;
+  s_progress_bar  = NULL;
+  s_vol_bar       = NULL;
+  s_vol_pct_label = NULL;
+  s_mode_label    = NULL;
+}
+
+/* ------------------------------------------------------------------ key handler */
+
+static bool preview_audio_on_key(const input_gamepad_state *gp,
+                                 const bool edge[]) {
+  if (!s_active)
+    return false;
+
+  if (edge[GAMEPAD_INPUT_UP]) {
+    int v = (int)audio_get_volume() + 5;
+    if (v > 100) v = 100;
+    audio_set_volume((uint8_t)v);
+    preview_audio_update_ui(true);
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_DOWN]) {
+    int v = (int)audio_get_volume() - 5;
+    if (v < 0) v = 0;
+    audio_set_volume((uint8_t)v);
+    preview_audio_update_ui(true);
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_LEFT]) {
+    audio_seek_seconds(-5);
+    preview_audio_update_ui(true);
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_RIGHT]) {
+    audio_seek_seconds(5);
+    preview_audio_update_ui(true);
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_L]) {
+    preview_audio_play_index(s_current_index - 1);
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_R]) {
+    preview_audio_play_index(s_current_index + 1);
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_START] || edge[GAMEPAD_INPUT_A]) {
+    audio_toggle_pause();
+    preview_audio_update_ui(true);
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_SELECT]) {
+    s_play_mode = (play_mode_t)((s_play_mode + 1) % PLAY_MODE_COUNT);
+    update_mode_label();
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_MENU]) {
+    if (s_backlight_off) {
+      lcd_set_brightness(s_backlight_restore);
+      s_backlight_off = false;
+      preview_audio_update_ui(true); /* redraw everything after screen wakes */
+    } else {
+      int32_t saved_bl = s_backlight_restore;
+      if (settings_load(SettingBacklight, &saved_bl) == 0) {
+        if (saved_bl >= 10 && saved_bl <= 100)
+          s_backlight_restore = (uint8_t)saved_bl;
+      }
+      lcd_set_brightness(0);
+      s_backlight_off = true;
+    }
+    return true;
+  }
+  (void)gp;
+  return false;
+}
+
+/* ------------------------------------------------------------------ timer */
+
+static void preview_audio_on_timer(void) {
+  if (!s_active)
+    return;
+
+  bool playing = audio_is_playing();
+  bool paused  = audio_is_paused();
+
+  /* Confirm that the current track has started (guard against the brief gap
+   * between audio_play_file_async() and the play task setting s_playing). */
+  if (!s_track_confirmed_playing && playing)
+    s_track_confirmed_playing = true;
+
+  /* Detect natural track end and auto-advance according to play mode. */
+  if (s_track_confirmed_playing && !playing && !paused) {
+    s_track_confirmed_playing = false;
+    s_last_playing = false; /* prevent stale UI state triggering on next tick */
+    switch (s_play_mode) {
+      case PLAY_MODE_LIST_LOOP:
+        preview_audio_play_index((s_current_index + 1) % s_playlist_count);
+        return;
+      case PLAY_MODE_SINGLE_LOOP:
+        preview_audio_play_index(s_current_index);
+        return;
+      case PLAY_MODE_LIST_PLAY:
+        if (s_current_index < s_playlist_count - 1) {
+          preview_audio_play_index(s_current_index + 1);
+          return;
+        }
+        /* Last track finished — fall through to update UI (shows Stop). */
+        break;
+      default:
+        break;
+    }
+  }
+
+  preview_audio_update_ui(false);
+}
+
+/* ------------------------------------------------------------------ export */
+
+const preview_app_t preview_audio_app = {
+    .id       = "audio",
+    .can_open = preview_audio_can_open,
+    .open     = preview_audio_open,
+    .close    = preview_audio_close,
+    .on_key   = preview_audio_on_key,
+    .on_timer = preview_audio_on_timer,
+};

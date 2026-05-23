@@ -37,6 +37,7 @@ typedef enum Setting {
   SettingScaleMode,
   SettingWifi,
   SettingAlg,
+  SettingUiTheme,
   SettingMax,
 } Setting;
 

@@ -2046,12 +2046,6 @@ CONFIG_WIFI_PROV_STA_ALL_CHANNEL_SCAN=y
 # end of Wi-Fi Provisioning Manager
 
 #
-# AppFS
-#
-CONFIG_APPFS_USE_RTC_REG=y
-# end of AppFS
-
-#
 # CMake Utilities
 #
 # CONFIG_CU_RELINKER_ENABLE is not set
@@ -2485,11 +2479,6 @@ CONFIG_LV_BUILD_DEMOS=y
 # CONFIG_LV_USE_DEMO_HIGH_RES is not set
 # end of Demos
 # end of LVGL configuration
-
-#
-# AppFS
-#
-# end of AppFS
 # end of Component config
 
 # CONFIG_IDF_EXPERIMENTAL_FEATURES is not set

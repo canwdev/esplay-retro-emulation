@@ -1,3 +1,14 @@
-idf_component_register(SRCS "launcher_main.c" "apps.c" "settings.c" "fnmatch.c"
-                    INCLUDE_DIRS ""
-                    REQUIRES esp_timer hal-drivers appfs lvgl nvs_flash esp_wifi file_server app_update)
+idf_component_register(
+    SRCS
+        "launcher_main.c"
+        "ui_theme.c"
+        "ui_home.c"
+        "ui_settings.c"
+        "ui_screen_test.c"
+        "file_manager.c"
+        "input_bridge.c"
+        "preview/preview_registry.c"
+        "preview/preview_text.c"
+        "preview/preview_audio.c"
+    INCLUDE_DIRS "." "preview"
+    REQUIRES esp_timer hal-drivers lvgl nvs_flash)

@@ -1,13 +1,13 @@
 /**
  * @file audio.h
- * @brief Minimal I2S WAV playback (16-bit PCM or 32-bit IEEE float → int16).
+ * @brief I2S playback for WAV and MP3 with volume, pause, seek controls.
  */
 
 #ifndef AUDIO_H
 #define AUDIO_H
 
 #include <stdbool.h>
-#include "esp_err.h"
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,13 +15,22 @@ extern "C" {
 
 void audio_init(void);
 
-/** Start playback in a background task. Stops any current playback first. */
+void audio_play_file_async(const char *path);
 void audio_play_wav_async(const char *path);
-
-/** Request stop; playback task exits shortly after. */
 void audio_stop_playback(void);
-
 bool audio_is_playing(void);
+
+void audio_set_volume(uint8_t pct);
+uint8_t audio_get_volume(void);
+
+void audio_pause(void);
+void audio_resume(void);
+void audio_toggle_pause(void);
+bool audio_is_paused(void);
+
+void audio_seek_seconds(int delta);
+uint32_t audio_get_position_ms(void);
+uint32_t audio_get_duration_ms(void);
 
 #ifdef __cplusplus
 }
