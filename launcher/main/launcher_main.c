@@ -16,6 +16,7 @@
 #include "ui_app.h"
 #include "ui_home.h"
 #include "ui_settings.h"
+#include "ui_font.h"
 #include "ui_theme.h"
 #include <time.h>
 
@@ -83,6 +84,7 @@ static void init_lvgl_display(void) {
 
   lv_display_set_flush_cb(disp, lvgl_flush_cb);
   lv_display_set_default(disp);
+  ui_font_apply_display(disp);
 
   lv_indev_t *indev = lv_indev_create();
   if (!indev) {

@@ -1,6 +1,7 @@
 #include "input_bridge.h"
 #include "file_manager.h"
 #include "gamepad.h"
+#include "input_bridge.h"
 #include "preview.h"
 #include "ui_app.h"
 #include "ui_home.h"
@@ -10,6 +11,11 @@
 static input_gamepad_state s_last;
 static bool s_last_valid;
 static lv_timer_t *s_poll_timer;
+static bool s_block_enter_until_a_release;
+
+void input_bridge_block_enter_until_release(void) {
+  s_block_enter_until_a_release = true;
+}
 
 static bool input_edge(const input_gamepad_state *cur, int idx) {
   return cur->values[idx] == 1 &&
@@ -51,6 +57,18 @@ static void input_poll_timer_cb(lv_timer_t *t) {
   if (g_ui.current_page == PAGE_FILES && edge[GAMEPAD_INPUT_MENU])
     fm_handle_menu_on_focus();
 
+  if (fm_uses_direct_nav()) {
+    if (edge[GAMEPAD_INPUT_UP])
+      fm_on_nav_key(LV_KEY_UP);
+    else if (edge[GAMEPAD_INPUT_DOWN])
+      fm_on_nav_key(LV_KEY_DOWN);
+    else
+      fm_on_nav_hold_tick(gp.values[GAMEPAD_INPUT_UP] == 1,
+                          gp.values[GAMEPAD_INPUT_DOWN] == 1);
+    if (edge[GAMEPAD_INPUT_A])
+      fm_on_nav_key(LV_KEY_ENTER);
+  }
+
   s_last = gp;
   s_last_valid = true;
 }
@@ -68,10 +86,20 @@ void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {
 
   data->state = LV_INDEV_STATE_RELEASED;
 
+  if (s_block_enter_until_a_release) {
+    if (gamepad_state.values[GAMEPAD_INPUT_A] == 0)
+      s_block_enter_until_a_release = false;
+    else
+      return;
+  }
+
   if (preview_is_active())
     return;
 
   if (ui_screen_test_is_active())
+    return;
+
+  if (fm_uses_direct_nav())
     return;
 
   if (gamepad_state.values[GAMEPAD_INPUT_UP] == 1) {

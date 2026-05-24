@@ -1,3 +1,4 @@
+#include "ui_font.h"
 #include "ui_theme.h"
 
 typedef struct {
@@ -81,7 +82,8 @@ static void ui_theme_init_styles(void) {
   lv_style_set_outline_width(&s_style_list_btn, 0);
   lv_style_set_outline_opa(&s_style_list_btn, LV_OPA_TRANSP);
   lv_style_set_text_color(&s_style_list_btn, s_text);
-  lv_style_set_pad_all(&s_style_list_btn, 6);
+  lv_style_set_text_font(&s_style_list_btn, ui_font_default());
+  lv_style_set_pad_all(&s_style_list_btn, 4);
 
   lv_style_init(&s_style_list_btn_focus);
   lv_style_set_bg_color(&s_style_list_btn_focus, s_focus_bg);
@@ -118,6 +120,7 @@ void ui_theme_apply_screen(lv_obj_t *screen) {
   lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(screen, 0, 0);
   lv_obj_set_style_pad_all(screen, 0, 0);
+  lv_obj_set_style_text_font(screen, ui_font_default(), 0);
 }
 
 void ui_theme_style_label_primary(lv_obj_t *label) {

@@ -1,6 +1,8 @@
 idf_component_register(
     SRCS
         "launcher_main.c"
+        "ui_font.c"
+        "fonts/ui_font_vonwaon.c"
         "ui_theme.c"
         "ui_home.c"
         "ui_settings.c"

@@ -8,3 +8,11 @@ CONFIG_AUDIO_AMP_GPIO=4
 
 # No WiFi AP / HTTP file server — keeps wpa_supplicant, lwip, TLS out of the build.
 CONFIG_ESP_WIFI_ENABLED=n
+
+# UTF-8 paths for non-ASCII (e.g. Japanese) long filenames on SD FAT.
+CONFIG_FATFS_API_ENCODING_UTF_8=y
+CONFIG_FATFS_LFN_HEAP=y
+
+# LVGL: use libc heap so large directory lists don't exhaust a fixed pool.
+# CONFIG_LV_USE_BUILTIN_MALLOC is not set
+CONFIG_LV_USE_CLIB_MALLOC=y

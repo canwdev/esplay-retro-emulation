@@ -3,6 +3,7 @@
 #include "file_manager.h"
 #include "lcd.h"
 #include "settings.h"
+#include "ui_settings.h"
 #include "ui_theme.h"
 #include <dirent.h>
 #include <stdint.h>
@@ -75,6 +76,10 @@ static bool preview_audio_can_open(const char *path) {
 
 /* ------------------------------------------------------------------ playlist */
 
+static int preview_playlist_compare(const void *a, const void *b) {
+  return strcasecmp((const char *)a, (const char *)b);
+}
+
 static void preview_audio_build_playlist(const char *cwd, const char *current) {
   s_playlist_count = 0;
   s_current_index  = 0;
@@ -83,27 +88,26 @@ static void preview_audio_build_playlist(const char *cwd, const char *current) {
   if (!dir)
     return;
 
-  static fm_entry_t entries[FM_MAX_ENTRIES];
-  size_t       n = 0;
   struct dirent *de;
-  while ((de = readdir(dir)) != NULL && n < FM_MAX_ENTRIES) {
+  while ((de = readdir(dir)) != NULL && s_playlist_count < AUDIO_PLAYLIST_MAX) {
     if (de->d_type != DT_REG && de->d_type != DT_UNKNOWN)
       continue;
     if (!fm_is_playable_audio_filename(de->d_name))
       continue;
-    strlcpy(entries[n].name, de->d_name, FM_NAME_LEN);
-    entries[n].is_dir = false;
-    n++;
+    strlcpy(s_playlist[s_playlist_count], de->d_name, FM_NAME_LEN);
+    s_playlist_count++;
   }
   closedir(dir);
 
-  qsort(entries, n, sizeof(entries[0]), fm_entry_compare);
+  if (s_playlist_count > 1)
+    qsort(s_playlist, s_playlist_count, FM_NAME_LEN, preview_playlist_compare);
 
-  for (size_t i = 0; i < n && s_playlist_count < AUDIO_PLAYLIST_MAX; i++) {
-    strlcpy(s_playlist[s_playlist_count], entries[i].name, FM_NAME_LEN);
-    if (strcasecmp(entries[i].name, fm_base_name(current)) == 0)
-      s_current_index = s_playlist_count;
-    s_playlist_count++;
+  const char *cur = fm_base_name(current);
+  for (int i = 0; i < s_playlist_count; i++) {
+    if (strcasecmp(s_playlist[i], cur) == 0) {
+      s_current_index = i;
+      break;
+    }
   }
 }
 
@@ -336,16 +340,18 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     return false;
 
   if (edge[GAMEPAD_INPUT_UP]) {
-    int v = (int)audio_get_volume() + 5;
+    int v = (int)audio_get_volume() + 1;
     if (v > 100) v = 100;
     audio_set_volume((uint8_t)v);
+    ui_settings_sync_volume((uint8_t)v);
     preview_audio_update_ui(true);
     return true;
   }
   if (edge[GAMEPAD_INPUT_DOWN]) {
-    int v = (int)audio_get_volume() - 5;
+    int v = (int)audio_get_volume() - 1;
     if (v < 0) v = 0;
     audio_set_volume((uint8_t)v);
+    ui_settings_sync_volume((uint8_t)v);
     preview_audio_update_ui(true);
     return true;
   }

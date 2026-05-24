@@ -103,11 +103,11 @@ static void settings_row_event_handler(lv_event_t *e) {
       }
       lv_group_focus_prev(lv_group_get_default());
     } else if (key == LV_KEY_LEFT || key == LV_KEY_RIGHT) {
-      int delta = (key == LV_KEY_RIGHT) ? 5 : -5;
+      int delta = (key == LV_KEY_RIGHT) ? 1 : -1;
       if (obj == s_row_btns[ROW_BRIGHTNESS]) {
         s_brightness += delta;
-        if (s_brightness < 10)
-          s_brightness = 10;
+        if (s_brightness < 1)
+          s_brightness = 1;
         if (s_brightness > 100)
           s_brightness = 100;
         settings_save_brightness();
@@ -182,6 +182,14 @@ static int32_t settings_migrate_theme(int32_t theme) {
   if (theme >= 0 && theme < UI_THEME_COUNT)
     return theme;
   return UI_THEME_DARK;
+}
+
+void ui_settings_sync_volume(uint8_t volume) {
+  if (volume > 100)
+    volume = 100;
+  s_volume = volume;
+  settings_save(SettingAudioVolume, s_volume);
+  settings_update_row_labels();
 }
 
 void ui_settings_load_persisted(void) {
