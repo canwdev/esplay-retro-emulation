@@ -1,11 +1,12 @@
 #include "ui_home.h"
 #include "file_manager.h"
+#include "lcd.h"
 #include "ui_app.h"
+#include "ui_chrome.h"
 #include "ui_settings.h"
 #include "ui_theme.h"
 #include "esp_log.h"
 #include "lvgl.h"
-#include "power.h"
 #include <string.h>
 
 static const char *TAG = "ui_home";
@@ -15,6 +16,7 @@ typedef enum {
   HOME_TILE_SETTINGS = 1,
 } home_tile_t;
 
+static ui_chrome_t s_chrome;
 static home_tile_t s_last_home_tile = HOME_TILE_FILES;
 
 static void home_update_selected_label(lv_obj_t *obj) {
@@ -95,30 +97,19 @@ void ui_home_create(void) {
   }
 
   lv_group_remove_all_objs(g_ui.input_group);
+  ui_settings_detach_ui();
+  ui_chrome_detach(&s_chrome);
   lv_obj_clean(g_ui.screen);
   ui_theme_apply_screen(g_ui.screen);
 
-  char buffer[64];
-  ui_app_get_time(buffer, sizeof(buffer));
+  s_chrome = ui_chrome_create(g_ui.screen, "ESPLAY");
 
-  g_ui.time_label = lv_label_create(g_ui.screen);
-  lv_label_set_text(g_ui.time_label, buffer);
-  ui_theme_style_label_secondary(g_ui.time_label);
-  lv_obj_align(g_ui.time_label, LV_ALIGN_TOP_LEFT, 6, 4);
-
-  lv_obj_t *title = lv_label_create(g_ui.screen);
-  lv_label_set_text(title, "ESPLAY");
-  ui_theme_style_label_accent(title);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
-
-  g_ui.battery_label = lv_label_create(g_ui.screen);
-  lv_label_set_text(g_ui.battery_label, LV_SYMBOL_BATTERY_FULL);
-  ui_theme_style_label_secondary(g_ui.battery_label);
-  lv_obj_align(g_ui.battery_label, LV_ALIGN_TOP_RIGHT, -6, 4);
-
+  lv_coord_t body_top = ui_chrome_body_top();
   lv_obj_t *center = lv_obj_create(g_ui.screen);
   lv_obj_remove_style_all(center);
-  lv_obj_set_size(center, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_width(center, LV_PCT(100));
+  lv_obj_set_height(center, LCD_HEIGHT - body_top);
+  lv_obj_align(center, LV_ALIGN_BOTTOM_MID, 0, 0);
   lv_obj_set_flex_flow(center, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(center, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
@@ -159,29 +150,4 @@ void ui_home_create(void) {
   }
 
   g_ui.current_page = PAGE_HOME;
-}
-
-void ui_home_update_status(void) {
-  if (g_ui.current_page != PAGE_HOME || !g_ui.time_label || !g_ui.battery_label)
-    return;
-
-  char buffer[64];
-  ui_app_get_time(buffer, sizeof(buffer));
-  lv_label_set_text(g_ui.time_label, buffer);
-
-  battery_state bat;
-  battery_level_read(&bat);
-
-  if (bat.state == FULL_CHARGED || bat.state == CHARGING)
-    lv_label_set_text(g_ui.battery_label, LV_SYMBOL_CHARGE);
-  else if (bat.percentage > 75)
-    lv_label_set_text(g_ui.battery_label, LV_SYMBOL_BATTERY_FULL);
-  else if (bat.percentage > 50)
-    lv_label_set_text(g_ui.battery_label, LV_SYMBOL_BATTERY_3);
-  else if (bat.percentage > 25)
-    lv_label_set_text(g_ui.battery_label, LV_SYMBOL_BATTERY_2);
-  else if (bat.percentage > 5)
-    lv_label_set_text(g_ui.battery_label, LV_SYMBOL_BATTERY_1);
-  else
-    lv_label_set_text(g_ui.battery_label, LV_SYMBOL_BATTERY_EMPTY);
 }

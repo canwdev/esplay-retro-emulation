@@ -4,6 +4,7 @@
 #include "lcd.h"
 #include "settings.h"
 #include "ui_settings.h"
+#include "ui_chrome.h"
 #include "ui_theme.h"
 #include <dirent.h>
 #include <stdint.h>
@@ -13,6 +14,8 @@
 
 #define AUDIO_PLAYLIST_MAX 96
 #define AUDIO_PATH_MAX     256
+#define AUDIO_VOL_HOLD_MS_INITIAL 400
+#define AUDIO_VOL_HOLD_MS_REPEAT  80
 
 typedef enum {
   PLAY_MODE_LIST_LOOP = 0, /* wrap around at end of list  (default) */
@@ -27,7 +30,8 @@ static int  s_current_index;
 static char s_current_path[AUDIO_PATH_MAX];
 static bool s_active;
 
-static lv_obj_t *s_title_label;
+static ui_chrome_t s_chrome;
+static lv_obj_t *s_filename_label;
 static lv_obj_t *s_track_label;
 static lv_obj_t *s_time_label;
 static lv_obj_t *s_status_label;
@@ -50,6 +54,9 @@ static play_mode_t s_play_mode;
 /* Set true once the current track is confirmed playing; cleared on track end
  * or when a new track is started, to gate auto-advance triggering. */
 static bool s_track_confirmed_playing;
+static bool s_vol_hold_armed;
+static int8_t s_vol_hold_dir;
+static uint32_t s_vol_hold_next_ms;
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -188,14 +195,64 @@ static void preview_audio_update_ui(bool force) {
   }
 }
 
+static void preview_audio_vol_hold_reset(void) {
+  s_vol_hold_armed = false;
+  s_vol_hold_dir   = 0;
+}
+
+static void preview_audio_apply_volume_delta(int delta) {
+  if (delta == 0)
+    return;
+  int v = (int)audio_get_volume() + delta;
+  if (v < 0)
+    v = 0;
+  if (v > 100)
+    v = 100;
+  audio_set_volume((uint8_t)v);
+  ui_settings_sync_volume((uint8_t)v);
+  preview_audio_update_ui(true);
+}
+
+static void preview_audio_vol_hold_tick(const input_gamepad_state *gp) {
+  bool up   = gp->values[GAMEPAD_INPUT_UP] == 1;
+  bool down = gp->values[GAMEPAD_INPUT_DOWN] == 1;
+
+  if ((up && down) || (!up && !down)) {
+    preview_audio_vol_hold_reset();
+    return;
+  }
+
+  int8_t dir = up ? 1 : -1;
+  uint32_t now = lv_tick_get();
+
+  if (!s_vol_hold_armed || s_vol_hold_dir != dir) {
+    s_vol_hold_armed   = true;
+    s_vol_hold_dir     = dir;
+    s_vol_hold_next_ms = now + AUDIO_VOL_HOLD_MS_INITIAL;
+    return;
+  }
+
+  if ((int32_t)(now - s_vol_hold_next_ms) < 0)
+    return;
+
+  preview_audio_apply_volume_delta(dir);
+  s_vol_hold_next_ms = now + AUDIO_VOL_HOLD_MS_REPEAT;
+}
+
+static void preview_audio_arm_volume_hold(int8_t dir) {
+  s_vol_hold_armed   = true;
+  s_vol_hold_dir     = dir;
+  s_vol_hold_next_ms = lv_tick_get() + AUDIO_VOL_HOLD_MS_INITIAL;
+}
+
 /* ------------------------------------------------------------------ playback */
 
 static void preview_audio_start_track(const char *path) {
   strlcpy(s_current_path, path, sizeof(s_current_path));
   s_track_confirmed_playing = false;
   audio_play_file_async(path);
-  if (s_title_label)
-    lv_label_set_text(s_title_label, fm_base_name(path));
+  if (s_filename_label && lv_obj_is_valid(s_filename_label))
+    lv_label_set_text(s_filename_label, fm_base_name(path));
   preview_audio_update_ui(true);
 }
 
@@ -218,26 +275,29 @@ static void preview_audio_play_index(int idx) {
 static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   preview_audio_build_playlist(args->cwd, path);
 
+  ui_chrome_detach(&s_chrome);
   lv_obj_clean(args->screen);
   ui_theme_apply_screen(args->screen);
+
+  s_chrome = ui_chrome_create(args->screen, "Music Player");
 
   /* ---- info card ---- */
   lv_obj_t *card = lv_obj_create(args->screen);
   lv_obj_remove_style_all(card);
   ui_theme_style_panel(card);
   lv_obj_set_size(card, 308, 118);
-  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 4);
   lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_all(card, 8, 0);
   lv_obj_set_style_pad_row(card, 4, 0);
 
-  s_title_label = lv_label_create(card);
-  lv_label_set_long_mode(s_title_label, LV_LABEL_LONG_MODE_DOTS);
-  lv_obj_set_width(s_title_label, 288);
-  lv_label_set_text(s_title_label, fm_base_name(path));
-  ui_theme_style_label_accent(s_title_label);
+  s_filename_label = lv_label_create(card);
+  lv_obj_set_width(s_filename_label, 288);
+  lv_label_set_long_mode(s_filename_label, LV_LABEL_LONG_MODE_WRAP);
+  lv_label_set_text(s_filename_label, fm_base_name(path));
+  ui_theme_style_label_primary(s_filename_label);
 
   s_status_label = lv_label_create(card);
   lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
@@ -301,6 +361,7 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   s_backlight_off   = false;
   s_backlight_restore = 70;
   s_track_confirmed_playing = false;
+  preview_audio_vol_hold_reset();
 
   int32_t saved_bl = 70;
   if (settings_load(SettingBacklight, &saved_bl) == 0) {
@@ -321,8 +382,10 @@ static void preview_audio_close(void) {
     s_backlight_off = false;
   }
   audio_stop_playback();
+  ui_chrome_detach(&s_chrome);
+  preview_audio_vol_hold_reset();
   s_active        = false;
-  s_title_label   = NULL;
+  s_filename_label = NULL;
   s_track_label   = NULL;
   s_time_label    = NULL;
   s_status_label  = NULL;
@@ -340,19 +403,13 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     return false;
 
   if (edge[GAMEPAD_INPUT_UP]) {
-    int v = (int)audio_get_volume() + 1;
-    if (v > 100) v = 100;
-    audio_set_volume((uint8_t)v);
-    ui_settings_sync_volume((uint8_t)v);
-    preview_audio_update_ui(true);
+    preview_audio_apply_volume_delta(1);
+    preview_audio_arm_volume_hold(1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_DOWN]) {
-    int v = (int)audio_get_volume() - 1;
-    if (v < 0) v = 0;
-    audio_set_volume((uint8_t)v);
-    ui_settings_sync_volume((uint8_t)v);
-    preview_audio_update_ui(true);
+    preview_audio_apply_volume_delta(-1);
+    preview_audio_arm_volume_hold(-1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_LEFT]) {
@@ -399,6 +456,8 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     }
     return true;
   }
+
+  preview_audio_vol_hold_tick(gp);
   (void)gp;
   return false;
 }

@@ -3,11 +3,13 @@
 #include "lcd.h"
 #include "settings.h"
 #include "ui_app.h"
+#include "ui_chrome.h"
 #include "ui_home.h"
 #include "ui_screen_test.h"
 #include "ui_theme.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "lvgl.h"
 #include "power.h"
 #include "sdcard.h"
@@ -21,6 +23,7 @@ typedef enum {
   ROW_BRIGHTNESS,
   ROW_VOLUME,
   ROW_THEME,
+  ROW_RESTART,
   ROW_SCREEN_TEST,
   ROW_COUNT
 } settings_row_t;
@@ -32,6 +35,7 @@ static lv_coord_t s_scroll_y = 0;
 static int32_t s_brightness = 70;
 static int32_t s_volume = 50;
 static int32_t s_theme = 0;
+static ui_chrome_t s_chrome;
 
 static void settings_save_brightness(void) {
   settings_save(SettingBacklight, s_brightness);
@@ -49,6 +53,9 @@ static void settings_save_theme(void) {
 }
 
 static void settings_update_row_labels(void) {
+  if (!s_row_btns[ROW_BRIGHTNESS])
+    return;
+
   if (s_row_btns[ROW_BRIGHTNESS]) {
     lv_obj_t *lbl = lv_obj_get_child(s_row_btns[ROW_BRIGHTNESS], 0);
     if (lbl)
@@ -89,6 +96,11 @@ static void settings_row_event_handler(lv_event_t *e) {
   if (code == LV_EVENT_KEY) {
     uint32_t key = lv_indev_get_key(lv_indev_get_act());
     if (key == LV_KEY_DOWN) {
+      if (obj == s_row_btns[ROW_RESTART] && s_scroll &&
+          lv_obj_get_scroll_bottom(s_scroll) > 0) {
+        lv_obj_scroll_by_bounded(s_scroll, 0, -36, LV_ANIM_ON);
+        return;
+      }
       if (obj == s_row_btns[ROW_SCREEN_TEST] && s_scroll &&
           lv_obj_get_scroll_bottom(s_scroll) > 0) {
         lv_obj_scroll_by_bounded(s_scroll, 0, -36, LV_ANIM_ON);
@@ -138,6 +150,8 @@ static void settings_row_event_handler(lv_event_t *e) {
 
   if (obj == s_row_btns[ROW_BACK])
     ui_home_create();
+  else if (obj == s_row_btns[ROW_RESTART])
+    esp_restart();
   else if (obj == s_row_btns[ROW_SCREEN_TEST]) {
     s_focus_row = ROW_SCREEN_TEST;
     if (s_scroll)
@@ -192,6 +206,11 @@ void ui_settings_sync_volume(uint8_t volume) {
   settings_update_row_labels();
 }
 
+void ui_settings_detach_ui(void) {
+  memset(s_row_btns, 0, sizeof(s_row_btns));
+  s_scroll = NULL;
+}
+
 void ui_settings_load_persisted(void) {
   if (settings_load(SettingBacklight, &s_brightness) != 0)
     s_brightness = 70;
@@ -239,19 +258,18 @@ void ui_settings_create(void) {
   }
 
   lv_group_remove_all_objs(g_ui.input_group);
+  ui_settings_detach_ui();
+  ui_chrome_detach(&s_chrome);
   lv_obj_clean(g_ui.screen);
   ui_theme_apply_screen(g_ui.screen);
 
-  lv_obj_t *title = lv_label_create(g_ui.screen);
-  lv_label_set_text(title, "Settings");
-  ui_theme_style_label_accent(title);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 2);
+  s_chrome = ui_chrome_create(g_ui.screen, "Settings");
 
   lv_obj_t *scroll = lv_obj_create(g_ui.screen);
   s_scroll = scroll;
   lv_obj_remove_style_all(scroll);
   lv_obj_set_size(scroll, 300, 196);
-  lv_obj_align(scroll, LV_ALIGN_TOP_MID, 0, 20);
+  lv_obj_align(scroll, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 2);
   lv_obj_set_style_bg_opa(scroll, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(scroll, 0, 0);
   lv_obj_set_flex_flow(scroll, LV_FLEX_FLOW_COLUMN);
@@ -281,6 +299,12 @@ void ui_settings_create(void) {
   lv_obj_add_event_cb(s_row_btns[ROW_THEME], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_THEME]);
+
+  s_row_btns[ROW_RESTART] =
+      settings_add_row(scroll, LV_SYMBOL_REFRESH " Restart");
+  lv_obj_add_event_cb(s_row_btns[ROW_RESTART], settings_row_event_handler,
+                      LV_EVENT_ALL, NULL);
+  lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_RESTART]);
 
   s_row_btns[ROW_SCREEN_TEST] =
       settings_add_row(scroll, LV_SYMBOL_IMAGE " Screen Test");

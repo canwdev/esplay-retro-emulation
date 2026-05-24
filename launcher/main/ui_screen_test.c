@@ -207,6 +207,7 @@ void ui_screen_test_open(void) {
   s_active = true;
 
   lv_group_remove_all_objs(g_ui.input_group);
+  ui_settings_detach_ui();
   lv_obj_clean(g_ui.screen);
 
   lv_obj_set_style_bg_opa(g_ui.screen, LV_OPA_COVER, 0);

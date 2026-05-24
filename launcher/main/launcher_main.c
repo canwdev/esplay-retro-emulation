@@ -15,10 +15,10 @@
 #include "settings.h"
 #include "ui_app.h"
 #include "ui_home.h"
+#include "ui_chrome.h"
 #include "ui_settings.h"
 #include "ui_font.h"
 #include "ui_theme.h"
-#include <time.h>
 
 static const char *TAG = "launcher";
 
@@ -27,17 +27,6 @@ ui_state_t g_ui = {0};
 static esp_lcd_panel_handle_t panel_handle;
 
 #define LVGL_TICK_PERIOD_MS 5
-
-void ui_app_get_time(char *buffer, int size) {
-  time_t now;
-  struct tm timeinfo;
-
-  time(&now);
-  setenv("TZ", "UTC+8", 1);
-  tzset();
-  localtime_r(&now, &timeinfo);
-  strftime(buffer, size, "%H:%M", &timeinfo);
-}
 
 void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   lv_draw_sw_rgb565_swap(px_map, lv_area_get_size(area));
@@ -127,7 +116,7 @@ static void run_main_loop(void) {
 
     TickType_t xNow = xTaskGetTickCount();
     if ((xNow - xLast) > pdMS_TO_TICKS(2000)) {
-      ui_home_update_status();
+      ui_chrome_update_battery();
       xLast = xNow;
     }
   }

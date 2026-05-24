@@ -3,6 +3,7 @@
 #include "input_bridge.h"
 #include "preview.h"
 #include "ui_app.h"
+#include "ui_chrome.h"
 #include "ui_home.h"
 #include "ui_font.h"
 #include "ui_theme.h"
@@ -24,7 +25,7 @@ static const char *TAG = "file_manager";
 #define FM_MAX_VROWS       10
 /* Pixel offset from screen top where the list panel begins. */
 #define FM_HEADER_BOTTOM   36
-/* Height reserved at the bottom for the status hint label. */
+/* Height reserved at the bottom for the file size label. */
 #define FM_STATUS_H        18
 /* Long-press auto-scroll timing (ms). */
 #define FM_HOLD_MS_INITIAL 400
@@ -39,7 +40,8 @@ typedef struct {
 static char fm_cwd[FM_PATH_MAX];
 static char fm_delete_path[FM_PATH_MAX];
 static char fm_context_path[FM_PATH_MAX];
-static lv_obj_t *fm_status_label;
+static lv_obj_t *fm_status_pos_label;
+static lv_obj_t *fm_status_size_label;
 static lv_obj_t *fm_open_mbox;
 static lv_obj_t *s_list_panel;
 static fm_vrow_t s_vrows[FM_MAX_VROWS];
@@ -55,6 +57,7 @@ static int s_focus_idx;
 static int s_window_start;
 static bool s_show_back;   /* "Back" row — root (/sd) only              */
 static bool s_show_up;     /* ".." row — subdirectories only            */
+static ui_chrome_t s_chrome;
 static bool s_open_err;
 static bool s_hold_armed;
 static uint32_t s_hold_dir;
@@ -64,8 +67,10 @@ static void fm_prompt_delete(const char *fullpath);
 static void fm_show_context_menu(const char *fullpath);
 static void fm_track_mbox(lv_obj_t *mbox);
 static void fm_style_dialog_btn(lv_obj_t *btn);
+static void fm_apply_dialog_font(lv_obj_t *obj);
 static const char *fm_entry_symbol(const char *name, bool is_dir);
 static void fm_virtual_sync_rows(void);
+static void fm_update_status_label(void);
 
 typedef struct {
   const char *symbol;
@@ -312,6 +317,16 @@ static void fm_remember_focus(void) {
   fm_restore_focus = true;
 }
 
+static void fm_remember_child_for_parent(void) {
+  if (strcmp(fm_cwd, "/sd") == 0)
+    return;
+  const char *name = fm_base_name(fm_cwd);
+  if (!name || name[0] == '\0')
+    return;
+  strlcpy(fm_last_focus, name, sizeof(fm_last_focus));
+  fm_restore_focus = true;
+}
+
 static lv_coord_t fm_font_line_h(lv_obj_t *lbl) {
   const lv_font_t *f = lv_obj_get_style_text_font(lbl, LV_PART_MAIN);
   if (!f)
@@ -386,12 +401,8 @@ static void fm_virtual_sync_rows(void) {
     fm_vrow_apply_single_line(row);
   }
 
-  if (fm_status_label && lv_obj_is_valid(fm_status_label) && s_logical_count > 0) {
-    char hint[64];
-    snprintf(hint, sizeof(hint), "%d/%d  A:open  B:back  MENU:menu",
-             s_focus_idx + 1, s_logical_count);
-    lv_label_set_text(fm_status_label, hint);
-  }
+  if (fm_status_pos_label && lv_obj_is_valid(fm_status_pos_label))
+    fm_update_status_label();
 }
 
 static void fm_create_vrow(fm_vrow_t *row, lv_obj_t *parent) {
@@ -431,6 +442,53 @@ static void fm_format_size(char *buf, size_t buf_sz, unsigned long bytes) {
     snprintf(buf, buf_sz, "%lu B", bytes);
 }
 
+static void fm_update_status_label(void) {
+  if (fm_status_pos_label && lv_obj_is_valid(fm_status_pos_label)) {
+    if (s_logical_count > 0)
+      lv_label_set_text_fmt(fm_status_pos_label, "%d/%d", s_focus_idx + 1,
+                            s_logical_count);
+    else
+      lv_label_set_text(fm_status_pos_label, "");
+  }
+
+  if (!fm_status_size_label || !lv_obj_is_valid(fm_status_size_label))
+    return;
+
+  const char *name = NULL;
+  const char *sym  = NULL;
+  if (!fm_logical_item(s_focus_idx, &name, &sym, NULL) || !name) {
+    lv_label_set_text(fm_status_size_label, "");
+    return;
+  }
+
+  if (strcmp(name, "Back") == 0 || strcmp(name, "..") == 0 ||
+      strcmp(name, "(open error)") == 0) {
+    lv_label_set_text(fm_status_size_label, "");
+    return;
+  }
+
+  char full[FM_PATH_MAX];
+  if (!fm_build_path(full, sizeof(full), name)) {
+    lv_label_set_text(fm_status_size_label, "");
+    return;
+  }
+
+  struct stat st;
+  if (stat(full, &st) != 0) {
+    lv_label_set_text(fm_status_size_label, "");
+    return;
+  }
+
+  if (S_ISDIR(st.st_mode)) {
+    lv_label_set_text(fm_status_size_label, "Folder");
+    return;
+  }
+
+  char sz[32];
+  fm_format_size(sz, sizeof(sz), (unsigned long)st.st_size);
+  lv_label_set_text(fm_status_size_label, sz);
+}
+
 static void fm_mbox_closed_cb(lv_event_t *e) {
   if (lv_event_get_code(e) != LV_EVENT_DELETE)
     return;
@@ -443,9 +501,22 @@ static void fm_style_dialog_btn(lv_obj_t *btn) {
   ui_theme_style_list_btn(btn);
 }
 
+static void fm_apply_dialog_font(lv_obj_t *obj) {
+  const lv_font_t *font = ui_font_builtin();
+
+  if (lv_obj_check_type(obj, &lv_label_class) ||
+      lv_obj_check_type(obj, &lv_list_button_class) ||
+      lv_obj_check_type(obj, &lv_button_class))
+    lv_obj_set_style_text_font(obj, font, 0);
+
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(obj); i++)
+    fm_apply_dialog_font(lv_obj_get_child(obj, i));
+}
+
 static void fm_track_mbox(lv_obj_t *mbox) {
   fm_open_mbox = mbox;
   ui_theme_apply_msgbox(mbox);
+  fm_apply_dialog_font(mbox);
   lv_obj_add_event_cb(mbox, fm_mbox_closed_cb, LV_EVENT_DELETE, NULL);
 }
 
@@ -455,62 +526,7 @@ static void fm_dialog_close_cb(lv_event_t *e) {
     lv_msgbox_close(fm_open_mbox);
 }
 
-static void fm_show_info(const char *fullpath) {
-  struct stat st;
-  if (stat(fullpath, &st) != 0)
-    return;
-
-  fm_remember_focus();
-
-  char body[384];
-  const char *base = fm_base_name(fullpath);
-
-  if (S_ISDIR(st.st_mode)) {
-    int count = 0;
-    DIR *d = opendir(fullpath);
-    if (d) {
-      struct dirent *de;
-      while ((de = readdir(d)) != NULL) {
-        if (strcmp(de->d_name, ".") != 0 && strcmp(de->d_name, "..") != 0)
-          count++;
-      }
-      closedir(d);
-    }
-    snprintf(body, sizeof(body), "%s\nType: Folder\nItems: %d", base, count);
-  } else if (S_ISREG(st.st_mode)) {
-    char szbuf[32];
-    fm_format_size(szbuf, sizeof(szbuf), (unsigned long)st.st_size);
-    const char *type = fm_is_wav_filename(base)    ? "WAV audio"
-                     : fm_is_mp3_filename(base)    ? "MP3 audio"
-                                                   : "File";
-    snprintf(body, sizeof(body), "%s\nType: %s\nSize: %s", base, type, szbuf);
-  } else {
-    snprintf(body, sizeof(body), "%s\nType: Other", base);
-  }
-
-  lv_obj_t *mbox = lv_msgbox_create(NULL);
-  lv_msgbox_add_title(mbox, LV_SYMBOL_FILE " Info");
-  fm_dialog_add_body(lv_msgbox_get_content(mbox), body);
-
-  static const fm_dialog_item_t items[] = {
-      {LV_SYMBOL_CLOSE, "Close", fm_dialog_close_cb},
-  };
-
-  lv_obj_t *focus_btn = NULL;
-  fm_dialog_add_list(lv_msgbox_get_content(mbox), items, 1, &focus_btn);
-  fm_dialog_show(mbox, focus_btn);
-}
-
 static void fm_menu_cancel_cb(lv_event_t *e) { fm_dialog_close_cb(e); }
-
-static void fm_menu_info_cb(lv_event_t *e) {
-  (void)e;
-  fm_refresh_on_mbox_close = false;
-  if (fm_open_mbox)
-    lv_msgbox_close(fm_open_mbox);
-  fm_refresh_on_mbox_close = true;
-  fm_show_info(fm_context_path);
-}
 
 static void fm_menu_delete_cb(lv_event_t *e) {
   (void)e;
@@ -529,13 +545,12 @@ static void fm_show_context_menu(const char *fullpath) {
   lv_msgbox_add_title(mbox, fm_base_name(fullpath));
 
   static const fm_dialog_item_t items[] = {
-      {LV_SYMBOL_FILE, "Info", fm_menu_info_cb},
       {LV_SYMBOL_TRASH, "Delete", fm_menu_delete_cb},
       {LV_SYMBOL_CLOSE, "Cancel", fm_menu_cancel_cb},
   };
 
   lv_obj_t *focus_btn = NULL;
-  fm_dialog_add_list(lv_msgbox_get_content(mbox), items, 3, &focus_btn);
+  fm_dialog_add_list(lv_msgbox_get_content(mbox), items, 2, &focus_btn);
   fm_dialog_show(mbox, focus_btn);
 }
 
@@ -574,8 +589,6 @@ static void fm_open_preview(const char *fullpath) {
   };
   if (preview_open_for_path(fullpath, &args))
     g_ui.current_page = PAGE_FILES;
-  else
-    fm_show_info(fullpath);
 }
 
 static void fm_open_by_name(const char *name) {
@@ -587,8 +600,8 @@ static void fm_open_by_name(const char *name) {
     return;
   }
   if (strcmp(name, "..") == 0) {
+    fm_remember_child_for_parent();
     fm_go_parent();
-    fm_restore_focus = false;
     fm_create();
     return;
   }
@@ -616,8 +629,6 @@ static void fm_open_by_name(const char *name) {
   if (S_ISREG(st.st_mode)) {
     if (preview_can_open(full))
       fm_open_preview(full);
-    else
-      fm_show_info(full);
   }
 }
 
@@ -712,8 +723,8 @@ void fm_handle_back(void) {
 
   fm_normalize_cwd();
   if (strcmp(fm_cwd, "/sd") != 0) {
+    fm_remember_child_for_parent();
     fm_go_parent();
-    fm_restore_focus = false;
     fm_create();
     return;
   }
@@ -762,20 +773,18 @@ void fm_create(void) {
   if (s_text_w < 40) s_text_w = 40;
 
   lv_group_remove_all_objs(g_ui.input_group);
+  ui_chrome_detach(&s_chrome);
   lv_obj_clean(g_ui.screen);
   ui_theme_apply_screen(g_ui.screen);
 
-  lv_obj_t *title = lv_label_create(g_ui.screen);
-  lv_label_set_text(title, "Files");
-  ui_theme_style_label_accent(title);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 2);
+  s_chrome = ui_chrome_create(g_ui.screen, "Files");
 
   lv_obj_t *path_label = lv_label_create(g_ui.screen);
   lv_label_set_long_mode(path_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
   lv_obj_set_width(path_label, panel_w);
   lv_label_set_text(path_label, fm_cwd);
   ui_theme_style_label_secondary(path_label);
-  lv_obj_align(path_label, LV_ALIGN_TOP_MID, 0, 18);
+  lv_obj_align(path_label, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top());
 
   s_list_panel = lv_obj_create(g_ui.screen);
   lv_obj_remove_style_all(s_list_panel);
@@ -850,11 +859,13 @@ void fm_create(void) {
   }
   s_window_start = 0;   /* fm_virtual_sync_rows centres it */
 
-  fm_status_label = lv_label_create(g_ui.screen);
-  lv_label_set_long_mode(fm_status_label, LV_LABEL_LONG_MODE_DOTS);
-  lv_obj_set_width(fm_status_label, panel_w);
-  ui_theme_style_label_secondary(fm_status_label);
-  lv_obj_align(fm_status_label, LV_ALIGN_BOTTOM_MID, 0, -2);
+  fm_status_pos_label = lv_label_create(g_ui.screen);
+  ui_theme_style_label_secondary(fm_status_pos_label);
+  lv_obj_align(fm_status_pos_label, LV_ALIGN_BOTTOM_LEFT, 8, -2);
+
+  fm_status_size_label = lv_label_create(g_ui.screen);
+  ui_theme_style_label_secondary(fm_status_size_label);
+  lv_obj_align(fm_status_size_label, LV_ALIGN_BOTTOM_RIGHT, -8, -2);
 
   fm_virtual_sync_rows();
 
