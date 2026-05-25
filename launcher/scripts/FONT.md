@@ -1,6 +1,6 @@
 # UI 字体生成说明
 
-Launcher 默认 UI 字体为 **凤凰点阵 Vonwaon Bitmap 12px**（`ui_font_vonwaon`），由本目录脚本从源 TTF 转为 LVGL C 数组。
+Launcher 默认 UI 字体为 **凤凰点阵 Vonwaon Bitmap 12px**（`ui_font_esplayfont`），由本目录脚本从源 TTF 转为 LVGL C 数组。
 
 ## 目录结构
 
@@ -12,7 +12,7 @@ launcher/scripts/
     VonwaonBitmap-12px.ttf   # 源字体（需保留在仓库中）
 ```
 
-生成结果写入：`launcher/main/fonts/ui_font_vonwaon.c`
+生成结果写入：`launcher/main/fonts/ui_font_esplayfont.c`
 
 ## 依赖
 
@@ -59,8 +59,8 @@ rm -rf package fontpkg-vonwaon-bitmap-12px-*.tgz
 
 ## 集成说明
 
-- `launcher/main/ui_font.c`：`ui_font_default()` 返回 `ui_font_vonwaon`
-- `launcher/main/CMakeLists.txt`：编译 `ui_font.c` 与 `fonts/ui_font_vonwaon.c`
+- `launcher/main/ui_font.c`：`ui_font_default()` 返回 `ui_font_esplayfont`
+- `launcher/main/CMakeLists.txt`：编译 `ui_font.c` 与 `fonts/ui_font_esplayfont.c`
 - 文件管理器行高 `FM_ROW_H` 按 Vonwaon 约 13px 行高 + 内边距设置
 
 ## 字符覆盖

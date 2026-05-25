@@ -1,9 +1,9 @@
 #include "ui_font.h"
 
-LV_FONT_DECLARE(ui_font_vonwaon);
+LV_FONT_DECLARE(ui_font_esplayfont);
 LV_FONT_DECLARE(lv_font_montserrat_14);
 
-const lv_font_t *ui_font_default(void) { return &ui_font_vonwaon; }
+const lv_font_t *ui_font_default(void) { return &ui_font_esplayfont; }
 
 const lv_font_t *ui_font_builtin(void) { return &lv_font_montserrat_14; }
 

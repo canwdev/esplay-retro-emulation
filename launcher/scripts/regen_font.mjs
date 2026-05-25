@@ -7,8 +7,8 @@ import { execFileSync } from 'child_process';
 import opentype from 'opentype.js';
 
 // ==================== 配置区域 ====================
-const FONT_NAME = 'VonwaonBitmap-12px';        // 字体文件名（不含后缀）
-const LV_FONT_NAME = 'ui_font_vonwaon';   // LVGL 内部的字体变量名
+const FONT_NAME = 'Cubic_11';        // 字体文件名（不含后缀）
+const LV_FONT_NAME = 'ui_font_esplayfont';   // LVGL 内部的字体变量名
 const FONT_SIZE = '12';                      // 字体渲染大小 (从 12 改为 16)
 // =================================================
 
