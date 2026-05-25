@@ -7,7 +7,7 @@ Launcher 默认 UI 字体为 **凤凰点阵 Vonwaon Bitmap 12px**（`ui_font_von
 ```
 launcher/scripts/
   FONT.md                 # 本说明
-  gen_ui_font.sh          # 生成脚本
+  regen_font.mjs          # 生成脚本
   fonts/
     VonwaonBitmap-12px.ttf   # 源字体（需保留在仓库中）
 ```
@@ -23,11 +23,11 @@ Montserrat 14 作为 fallback，由 ESP-IDF LVGL 组件提供，无需本地 TTF
 
 ## 重新生成
 
-在 `launcher/` 目录下：
+在 `launcher/scripts` 目录下：
 
 ```bash
-bash scripts/gen_ui_font.sh
-idf.py build
+pnpm i
+node regen_font.mjs
 ```
 
 脚本会：

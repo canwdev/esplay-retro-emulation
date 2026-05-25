@@ -1,0 +1,6 @@
+{
+	"dependencies": {
+		"opentype.js": "^2.0.0",
+		"lv_font_conv": "^1.5.3"
+	}
+}
