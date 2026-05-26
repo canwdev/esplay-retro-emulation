@@ -38,10 +38,11 @@
 ### 文件管理器
 
 - 浏览 `/sd` 及子目录，`..` 返回上级，Back 回主页
-- **A**：打开 — 进目录 / 播放 `.wav` / 其它文件显示 Info
+- **A**：打开 — 进目录 / 播放音频 / 其它文件显示 Info
 - **B**：菜单 — **Info**（名称、类型、大小/目录项数）、**Delete**（确认后删除）
-- **WAV 播放**：`audio_play_wav_async()`，支持 PCM16 与 IEEE float32；底部状态栏显示播放中
-- 大数组用 **`static`**（如 `fm_entry_t entries[FM_MAX_ENTRIES]`），避免 main task 栈溢出
+- **音频播放**：支持 WAV (PCM16/Float32) 与 MP3；支持歌单自动连播与循环模式；底部状态栏显示播放中
+- 大数组用 **`static`**（如 `fm_entry_t s_entries[FM_MAX_ENTRIES]`），避免 main task 栈溢出
+- **限制**：单目录支持最多 **512** 个条目 (`FM_MAX_ENTRIES`)，音乐播放列表支持最多 **512** 首歌曲 (`AUDIO_PLAYLIST_MAX`)
 
 ### Settings
 
@@ -103,7 +104,8 @@ idf.py flash monitor
 ## Flash / RAM 参考（精简后 Launcher）
 
 - 固件约 **~1MB 级**（Debug 构建）；移除 WiFi/LVGL 外最大头仍是 **LVGL** 与 **ESP-IDF 基础库**。
-- RAM：LVGL 双缓冲 ~30KB + `CONFIG_LV_MEM_SIZE` 32KB + WiFi 关闭后显著减轻；文件管理 static ~9KB BSS。
+- RAM：LVGL 双缓冲 ~30KB + `CONFIG_LV_MEM_SIZE` 32KB + WiFi 关闭后显著减轻。
+- BSS 占用：文件管理条目约 **66KB** (`FM_MAX_ENTRIES=512`)，音频播放列表约 **64KB** (`AUDIO_PLAYLIST_MAX=512`)。
 
 ## 与上游 README 的差异
 
