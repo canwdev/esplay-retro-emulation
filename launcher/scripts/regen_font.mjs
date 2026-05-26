@@ -3,8 +3,11 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execFileSync } from 'child_process';
+import { createRequire } from 'module';
 import opentype from 'opentype.js';
+
+const require = createRequire(import.meta.url);
+const lv_font_conv = require('lv_font_conv/lib/cli');
 
 // ==================== 配置区域 ====================
 const FONT_NAME = 'Cubic_11';        // 字体文件名（不含后缀）
@@ -29,7 +32,7 @@ if (!fs.existsSync(FONT_PATH)) {
 
 function toRanges(codes) {
   if (codes.length === 0) return [];
-  
+
   const parts = [];
   let start = codes[0];
   let prev = codes[0];
@@ -47,11 +50,11 @@ function toRanges(codes) {
   return parts;
 }
 
-function main() {
+async function main() {
   try {
     const buffer = fs.readFileSync(FONT_PATH);
     const font = opentype.parse(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
-    
+
     const vonCodes = [];
     if (font.tables && font.tables.cmap && font.tables.cmap.glyphIndexMap) {
       const glyphMap = font.tables.cmap.glyphIndexMap;
@@ -70,7 +73,7 @@ function main() {
         }
       }
     }
-    
+
     if (vonCodes.length === 0) {
       throw new Error("No valid unicode glyphs found in the font file.");
     }
@@ -106,7 +109,8 @@ function main() {
     console.log(`${FONT_NAME} ${vonCodes.length} glyphs, ${chunks.length} range chunks`);
 
     // 3. 执行转换
-    execFileSync('npx', ['lv_font_conv', ...args], { stdio: 'inherit' });
+    console.log(`Generating font, please wait...`);
+    await lv_font_conv.run(args);
 
     // 4. 替换 include
     if (fs.existsSync(OUT_PATH)) {
