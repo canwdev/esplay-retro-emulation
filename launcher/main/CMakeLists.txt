@@ -13,6 +13,5 @@ idf_component_register(
         "preview/preview_registry.c"
         "preview/preview_text.c"
         "preview/preview_audio.c"
-        "text_codec.c"
     INCLUDE_DIRS "." "preview"
     REQUIRES esp_timer hal-drivers lvgl nvs_flash)

@@ -12,7 +12,7 @@
 #include <string.h>
 #include <strings.h>
 
-#define AUDIO_PLAYLIST_MAX 512
+#define AUDIO_PLAYLIST_MAX 256
 #define AUDIO_PATH_MAX     256
 #define AUDIO_VOL_HOLD_MS_INITIAL 400
 #define AUDIO_VOL_HOLD_MS_REPEAT  80

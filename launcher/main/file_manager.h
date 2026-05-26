@@ -6,7 +6,7 @@
 #include <stddef.h>
 
 #define FM_PATH_MAX 256
-#define FM_MAX_ENTRIES 512
+#define FM_MAX_ENTRIES 256
 #define FM_NAME_LEN 128
 
 typedef struct {
