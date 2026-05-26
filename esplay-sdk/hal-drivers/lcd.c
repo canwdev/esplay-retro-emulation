@@ -28,7 +28,7 @@
 #define LCD_LEDC_MODE LEDC_LOW_SPEED_MODE
 #define LCD_LEDC_CHANNEL LEDC_CHANNEL_0
 #define LCD_LEDC_DUTY_RES LEDC_TIMER_10_BIT // 10-bit resolution (0-1023)
-#define LCD_LEDC_FREQ_HZ 5000               // 5kHz frequency
+#define LCD_LEDC_FREQ_HZ 20000              // 20kHz frequency (above audible range to reduce noise)
 
 /**
  * @brief Initialize the LCD backlight using PWM (LEDC).

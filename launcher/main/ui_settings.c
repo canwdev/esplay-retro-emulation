@@ -3,6 +3,7 @@
 #include "lcd.h"
 #include "settings.h"
 #include "ui_app.h"
+#include "ui_backlight.h"
 #include "ui_chrome.h"
 #include "ui_home.h"
 #include "ui_screen_test.h"
@@ -23,10 +24,14 @@ typedef enum {
   ROW_BRIGHTNESS,
   ROW_VOLUME,
   ROW_THEME,
+  ROW_BACKLIGHT_TIMEOUT,
   ROW_RESTART,
   ROW_SCREEN_TEST,
   ROW_COUNT
 } settings_row_t;
+
+static const int32_t s_timeout_options[] = {0, 5, 10, 30, 60};
+static const int s_timeout_options_count = sizeof(s_timeout_options) / sizeof(s_timeout_options[0]);
 
 static lv_obj_t *s_row_btns[ROW_COUNT];
 static lv_obj_t *s_scroll;
@@ -35,7 +40,12 @@ static lv_coord_t s_scroll_y = 0;
 static int32_t s_brightness = 70;
 static int32_t s_volume = 50;
 static int32_t s_theme = 0;
+static int32_t s_backlight_timeout = 30;
 static ui_chrome_t s_chrome;
+
+static void settings_save_backlight_timeout(void) {
+  settings_save(SettingBacklightTimeout, s_backlight_timeout);
+}
 
 static void settings_save_brightness(void) {
   settings_save(SettingBacklight, s_brightness);
@@ -74,12 +84,23 @@ static void settings_update_row_labels(void) {
       lv_label_set_text_fmt(lbl, LV_SYMBOL_TINT " Theme: %s",
                             ui_theme_name((int)s_theme));
   }
+  if (s_row_btns[ROW_BACKLIGHT_TIMEOUT]) {
+    lv_obj_t *lbl = lv_obj_get_child(s_row_btns[ROW_BACKLIGHT_TIMEOUT], 0);
+    if (lbl) {
+      if (s_backlight_timeout == 0)
+        lv_label_set_text(lbl, LV_SYMBOL_EYE_OPEN " Auto Off: Never");
+      else
+        lv_label_set_text_fmt(lbl, LV_SYMBOL_EYE_OPEN " Auto Off: %lds",
+                              (long)s_backlight_timeout);
+    }
+  }
 }
 
 static lv_obj_t *settings_add_row(lv_obj_t *parent, const char *text) {
   lv_obj_t *btn = lv_btn_create(parent);
   lv_obj_set_width(btn, LV_PCT(100));
   lv_obj_set_height(btn, 28);
+  lv_obj_add_flag(btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
 
   lv_obj_t *lbl = lv_label_create(btn);
   lv_label_set_text(lbl, text);
@@ -96,25 +117,16 @@ static void settings_row_event_handler(lv_event_t *e) {
   if (code == LV_EVENT_KEY) {
     uint32_t key = lv_indev_get_key(lv_indev_get_act());
     if (key == LV_KEY_DOWN) {
-      if (obj == s_row_btns[ROW_RESTART] && s_scroll &&
-          lv_obj_get_scroll_bottom(s_scroll) > 0) {
-        lv_obj_scroll_by_bounded(s_scroll, 0, -36, LV_ANIM_ON);
-        return;
-      }
-      if (obj == s_row_btns[ROW_SCREEN_TEST] && s_scroll &&
-          lv_obj_get_scroll_bottom(s_scroll) > 0) {
-        lv_obj_scroll_by_bounded(s_scroll, 0, -36, LV_ANIM_ON);
-        return;
-      }
-      lv_group_focus_next(lv_group_get_default());
-    } else if (key == LV_KEY_UP) {
-      if (obj == s_row_btns[ROW_BACK] && s_scroll &&
-          lv_obj_get_scroll_top(s_scroll) > 0) {
-        lv_obj_scroll_by_bounded(s_scroll, 0, 36, LV_ANIM_ON);
-        return;
-      }
-      lv_group_focus_prev(lv_group_get_default());
-    } else if (key == LV_KEY_LEFT || key == LV_KEY_RIGHT) {
+      if (g_ui.input_group)
+        lv_group_focus_next(g_ui.input_group);
+      return;
+    }
+    if (key == LV_KEY_UP) {
+      if (g_ui.input_group)
+        lv_group_focus_prev(g_ui.input_group);
+      return;
+    }
+    if (key == LV_KEY_LEFT || key == LV_KEY_RIGHT) {
       int delta = (key == LV_KEY_RIGHT) ? 1 : -1;
       if (obj == s_row_btns[ROW_BRIGHTNESS]) {
         s_brightness += delta;
@@ -140,6 +152,22 @@ static void settings_row_event_handler(lv_event_t *e) {
         settings_save_theme();
         settings_update_row_labels();
         ui_settings_create();
+      } else if (obj == s_row_btns[ROW_BACKLIGHT_TIMEOUT]) {
+        int cur_idx = -1;
+        for (int i = 0; i < s_timeout_options_count; i++) {
+          if (s_timeout_options[i] == s_backlight_timeout) {
+            cur_idx = i;
+            break;
+          }
+        }
+        if (key == LV_KEY_RIGHT)
+          cur_idx = (cur_idx + 1) % s_timeout_options_count;
+        else
+          cur_idx = (cur_idx + s_timeout_options_count - 1) % s_timeout_options_count;
+        s_backlight_timeout = s_timeout_options[cur_idx];
+        settings_save_backlight_timeout();
+        ui_backlight_set_timeout(s_backlight_timeout);
+        settings_update_row_labels();
       }
     }
     return;
@@ -170,6 +198,16 @@ static void settings_add_info_block(lv_obj_t *parent, const char *title,
   lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(box, 8, 0);
   lv_obj_set_style_pad_row(box, 4, 0);
+  lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(box, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+  lv_obj_set_style_border_color(box, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
+  lv_obj_set_style_border_width(box, 2, LV_STATE_FOCUSED);
+  lv_obj_set_style_border_side(box, LV_BORDER_SIDE_FULL, LV_STATE_FOCUSED);
+
+  if (g_ui.input_group) {
+    lv_group_add_obj(g_ui.input_group, box);
+  }
+  lv_obj_add_event_cb(box, settings_row_event_handler, LV_EVENT_ALL, NULL);
 
   lv_obj_t *t = lv_label_create(box);
   lv_label_set_text(t, title);
@@ -218,6 +256,8 @@ void ui_settings_load_persisted(void) {
     s_volume = 50;
   if (settings_load(SettingUiTheme, &s_theme) != 0)
     s_theme = 0;
+  if (settings_load(SettingBacklightTimeout, &s_backlight_timeout) != 0)
+    s_backlight_timeout = 30;
   s_theme = settings_migrate_theme(s_theme);
 
   if (s_brightness < 10)
@@ -258,6 +298,7 @@ void ui_settings_create(void) {
   }
 
   lv_group_remove_all_objs(g_ui.input_group);
+  lv_group_set_wrap(g_ui.input_group, false);
   ui_settings_detach_ui();
   ui_chrome_detach(&s_chrome);
   lv_obj_clean(g_ui.screen);
@@ -268,8 +309,9 @@ void ui_settings_create(void) {
   lv_obj_t *scroll = lv_obj_create(g_ui.screen);
   s_scroll = scroll;
   lv_obj_remove_style_all(scroll);
-  lv_obj_set_size(scroll, 300, 196);
-  lv_obj_align(scroll, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 2);
+  lv_obj_set_size(scroll, 310, 186);
+  lv_obj_align(scroll, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 1);
+  lv_obj_set_style_pad_bottom(scroll, 20, 0);
   lv_obj_set_style_bg_opa(scroll, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(scroll, 0, 0);
   lv_obj_set_flex_flow(scroll, LV_FLEX_FLOW_COLUMN);
@@ -299,6 +341,12 @@ void ui_settings_create(void) {
   lv_obj_add_event_cb(s_row_btns[ROW_THEME], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_THEME]);
+
+  s_row_btns[ROW_BACKLIGHT_TIMEOUT] =
+      settings_add_row(scroll, LV_SYMBOL_EYE_OPEN " Auto Off");
+  lv_obj_add_event_cb(s_row_btns[ROW_BACKLIGHT_TIMEOUT],
+                      settings_row_event_handler, LV_EVENT_ALL, NULL);
+  lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_BACKLIGHT_TIMEOUT]);
 
   s_row_btns[ROW_RESTART] =
       settings_add_row(scroll, LV_SYMBOL_REFRESH " Restart");

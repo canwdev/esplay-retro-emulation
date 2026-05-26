@@ -36,12 +36,12 @@ typedef enum {
  **********************/
 static nvs_handle_t handle; // Handle type changed to nvs_handle_t in modern IDF
 
-static KeyType settings_types[SettingMax] = {TypeInt, TypeInt, TypeInt, TypeStr,
-                                             TypeInt, TypeInt, TypeInt, TypeInt};
+static KeyType settings_types[SettingMax] = {
+    TypeInt, TypeInt, TypeInt, TypeStr, TypeInt, TypeInt, TypeInt, TypeInt, TypeInt};
 
 static const char *settings_keys[SettingMax] = {
-    "volume", "backlight", "playmode", "rom_name",
-    "scale",  "wifi",      "scale_alg", "ui_theme"};
+    "volume", "backlight", "playmode", "rom_name", "scale",
+    "wifi",   "scale_alg", "ui_theme", "bl_timeout"};
 
 /**********************
  * GLOBAL FUNCTIONS

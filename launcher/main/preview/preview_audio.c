@@ -7,6 +7,7 @@
 #include "ui_chrome.h"
 #include "ui_theme.h"
 #include "esp_log.h"
+#include "ui_backlight.h"
 #include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -49,8 +50,6 @@ static bool      s_last_paused;
 static bool      s_last_playing;
 static int       s_last_track_index;
 static int       s_last_track_count;
-static bool      s_backlight_off;
-static uint8_t   s_backlight_restore;
 static play_mode_t s_play_mode;
 /* Set true once the current track is confirmed playing; cleared on track end
  * or when a new track is started, to gate auto-advance triggering. */
@@ -125,7 +124,7 @@ static void preview_audio_update_ui(bool force) {
   if (!s_active)
     return;
   /* No point updating widgets the user cannot see. */
-  if (s_backlight_off)
+  if (!ui_backlight_is_on())
     return;
   if (!s_progress_bar || !s_vol_bar || !s_time_label || !s_status_label)
     return;
@@ -268,6 +267,8 @@ static void preview_audio_play_index(int idx) {
   char full[AUDIO_PATH_MAX];
   snprintf(full, sizeof(full), "%s/%s", fm_get_cwd(),
            s_playlist[s_current_index]);
+  
+  ESP_LOGI("preview_audio", "Playing index %d: %s", idx, s_playlist[idx]);
   preview_audio_start_track(full);
 }
 
@@ -367,17 +368,9 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   s_last_playing    = false;
   s_last_track_index = -1;
   s_last_track_count = -1;
-  s_backlight_off   = false;
-  s_backlight_restore = 70;
   s_track_confirmed_playing = false;
   preview_audio_vol_hold_reset();
 
-  int32_t saved_bl = 70;
-  if (settings_load(SettingBacklight, &saved_bl) == 0) {
-    if (saved_bl < 10) saved_bl = 10;
-    if (saved_bl > 100) saved_bl = 100;
-    s_backlight_restore = (uint8_t)saved_bl;
-  }
   preview_audio_start_track(path);
 
   return true;
@@ -396,10 +389,6 @@ static void preview_audio_close(void) {
   if (s_playlist) {
     free(s_playlist);
     s_playlist = NULL;
-  }
-  if (s_backlight_off) {
-    lcd_set_brightness(s_backlight_restore);
-    s_backlight_off = false;
   }
   ui_chrome_detach(&s_chrome);
   preview_audio_vol_hold_reset();
@@ -460,19 +449,9 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     return true;
   }
   if (edge[GAMEPAD_INPUT_MENU]) {
-    if (s_backlight_off) {
-      lcd_set_brightness(s_backlight_restore);
-      s_backlight_off = false;
-      preview_audio_update_ui(true); /* redraw everything after screen wakes */
-    } else {
-      int32_t saved_bl = s_backlight_restore;
-      if (settings_load(SettingBacklight, &saved_bl) == 0) {
-        if (saved_bl >= 10 && saved_bl <= 100)
-          s_backlight_restore = (uint8_t)saved_bl;
-      }
-      lcd_set_brightness(0);
-      s_backlight_off = true;
-    }
+    ui_backlight_toggle();
+    if (ui_backlight_is_on())
+      preview_audio_update_ui(true);
     return true;
   }
 

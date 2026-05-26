@@ -1,12 +1,12 @@
 #include "input_bridge.h"
 #include "file_manager.h"
 #include "gamepad.h"
-#include "input_bridge.h"
 #include "preview.h"
 #include "ui_app.h"
 #include "ui_home.h"
 #include "ui_screen_test.h"
 #include "ui_settings.h"
+#include "ui_backlight.h"
 
 static input_gamepad_state s_last;
 static bool s_last_valid;
@@ -26,6 +26,36 @@ static void input_poll_timer_cb(lv_timer_t *t) {
   (void)t;
   input_gamepad_state gp;
   gamepad_read(&gp);
+
+  bool any_pressed = false;
+  for (int i = 0; i < GAMEPAD_INPUT_MAX; i++) {
+    if (gp.values[i] == 1) {
+      any_pressed = true;
+      break;
+    }
+  }
+
+  /* Handle global backlight logic. */
+  bool any_edge = false;
+  for (int i = 0; i < GAMEPAD_INPUT_MAX; i++) {
+    if (input_edge(&gp, i)) {
+      any_edge = true;
+      break;
+    }
+  }
+
+  if (any_edge && !ui_backlight_is_on()) {
+    ui_backlight_set_on(true);
+    /* Swallow the wake-up key press. */
+    s_last = gp;
+    s_last_valid = true;
+    return;
+  }
+
+  if (any_pressed) {
+    ui_backlight_refresh_timeout();
+  }
+  ui_backlight_process();
 
   bool edge[GAMEPAD_INPUT_MAX];
   for (int i = 0; i < GAMEPAD_INPUT_MAX; i++)
@@ -87,6 +117,11 @@ void input_bridge_init(void) {
 
 void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {
   (void)indev;
+  if (!ui_backlight_is_on()) {
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
+
   input_gamepad_state gamepad_state;
   gamepad_read(&gamepad_state);
 

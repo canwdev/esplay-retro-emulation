@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "ui_backlight.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,8 +39,6 @@ static ui_chrome_t s_chrome;
 static lv_obj_t *s_body_label;
 static lv_obj_t *s_status_label;
 static bool s_active;
-static bool s_backlight_off;
-static uint8_t s_backlight_restore;
 static bool s_page_hold_armed;
 static int8_t s_page_hold_dir;
 static uint32_t s_page_hold_next_ms;
@@ -321,15 +320,12 @@ static bool preview_text_open(const char *path, preview_open_args_t *args) {
   s_status_label = lv_label_create(args->screen);
   ui_theme_style_label_secondary(s_status_label);
   lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_MID, 0, -4);
-  s_backlight_off = false; s_backlight_restore = 70;
-  int32_t saved_bl = 70;
-  if (settings_load(SettingBacklight, &saved_bl) == 0) s_backlight_restore = (uint8_t)saved_bl;
+  
   text_show_page(); s_active = true;
   return true;
 }
 
 static void preview_text_close(void) {
-  if (s_backlight_off) lcd_set_brightness(s_backlight_restore);
   ui_chrome_detach(&s_chrome); text_doc_free(&s_doc);
   s_body_label = s_status_label = NULL; s_active = false;
 }
@@ -337,11 +333,10 @@ static void preview_text_close(void) {
 static bool preview_text_on_key(const input_gamepad_state *gp, const bool edge[]) {
   if (!s_active) return false;
   if (edge[GAMEPAD_INPUT_MENU]) {
-    if (s_backlight_off) { lcd_set_brightness(s_backlight_restore); s_backlight_off = false; }
-    else { lcd_set_brightness(0); s_backlight_off = true; }
+    ui_backlight_toggle();
     return true;
   }
-  if (s_backlight_off) return false;
+  if (!ui_backlight_is_on()) return false;
   if (edge[GAMEPAD_INPUT_UP] || edge[GAMEPAD_INPUT_LEFT] || edge[GAMEPAD_INPUT_L]) { text_change_page(-1); return true; }
   if (edge[GAMEPAD_INPUT_DOWN] || edge[GAMEPAD_INPUT_RIGHT] || edge[GAMEPAD_INPUT_R]) { text_change_page(1); return true; }
   preview_text_page_hold_tick(gp); return false;

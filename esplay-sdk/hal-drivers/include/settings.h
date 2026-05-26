@@ -38,6 +38,7 @@ typedef enum Setting {
   SettingWifi,
   SettingAlg,
   SettingUiTheme,
+  SettingBacklightTimeout,
   SettingMax,
 } Setting;
 

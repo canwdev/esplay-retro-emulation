@@ -19,6 +19,7 @@
 #include "ui_settings.h"
 #include "ui_font.h"
 #include "ui_theme.h"
+#include "ui_backlight.h"
 
 static const char *TAG = "launcher";
 
@@ -98,6 +99,7 @@ static void init_lvgl_display(void) {
   lv_group_set_default(g_ui.input_group);
   lv_indev_set_group(g_ui.input_device, g_ui.input_group);
 
+  ui_backlight_init();
   input_bridge_init();
   ui_home_create();
 }

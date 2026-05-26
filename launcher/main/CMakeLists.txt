@@ -8,6 +8,7 @@ idf_component_register(
         "ui_home.c"
         "ui_settings.c"
         "ui_screen_test.c"
+        "ui_backlight.c"
         "file_manager.c"
         "input_bridge.c"
         "preview/preview_registry.c"
