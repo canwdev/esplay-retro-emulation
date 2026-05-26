@@ -8,6 +8,8 @@
 #include "ui_font.h"
 #include "ui_theme.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "lvgl.h"
 #include <dirent.h>
 #include <stdint.h>
@@ -50,7 +52,7 @@ static int       s_text_w;         /* label width for DOTS/SCROLL modes      */
 static char fm_last_focus[FM_NAME_LEN];
 static bool fm_restore_focus;
 static bool fm_refresh_on_mbox_close = true;
-static fm_entry_t s_entries[FM_MAX_ENTRIES];
+static fm_entry_t *s_entries = NULL;
 static size_t s_entry_count;
 static int s_logical_count;
 static int s_focus_idx;
@@ -222,17 +224,6 @@ bool fm_close_top_dialog(void) {
     return false;
   lv_msgbox_close(fm_open_mbox);
   return true;
-}
-
-static bool fm_get_obj_label(lv_obj_t *obj, const char **out_name) {
-  for (uint32_t i = 0; i < lv_obj_get_child_cnt(obj); i++) {
-    lv_obj_t *child = lv_obj_get_child(obj, i);
-    if (lv_obj_check_type(child, &lv_label_class)) {
-      *out_name = lv_label_get_text(child);
-      return *out_name != NULL;
-    }
-  }
-  return false;
 }
 
 static bool fm_logical_item(int idx, const char **out_name, const char **out_sym,
@@ -582,13 +573,25 @@ static void fm_prompt_delete(const char *fullpath) {
 
 static void fm_open_preview(const char *fullpath) {
   fm_remember_focus();
+
+  /* Temporarily free file manager memory to give preview apps enough heap. */
+  if (s_entries) {
+    free(s_entries);
+    s_entries = NULL;
+  }
+
   preview_open_args_t args = {
       .screen = g_ui.screen,
       .input_group = g_ui.input_group,
       .cwd = fm_cwd,
   };
-  if (preview_open_for_path(fullpath, &args))
+
+  if (preview_open_for_path(fullpath, &args)) {
     g_ui.current_page = PAGE_FILES;
+  } else {
+    /* If preview fails to open, restore file manager memory. */
+    fm_create();
+  }
 }
 
 static void fm_open_by_name(const char *name) {
@@ -770,7 +773,27 @@ void fm_create(void) {
     return;
   }
 
-  preview_close();
+  /* 1. Close preview first to trigger memory cleanup (like s_playlist and audio stack). */
+  if (preview_is_active()) {
+    preview_close();
+  }
+
+  /* 2. Clean UI objects to free LVGL heap memory. */
+  lv_group_remove_all_objs(g_ui.input_group);
+  ui_chrome_detach(&s_chrome);
+  lv_obj_clean(g_ui.screen);
+
+  /* 3. Allocate memory for entries. */
+  if (!s_entries) {
+    s_entries = malloc(FM_MAX_ENTRIES * sizeof(fm_entry_t));
+    if (!s_entries) {
+      ESP_LOGE(TAG, "Failed to allocate memory for s_entries (Free Heap: %u, Max Block: %u)",
+               (unsigned)esp_get_free_heap_size(),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+      return;
+    }
+  }
+
   fm_normalize_cwd();
   s_entry_count = 0;
 
@@ -790,9 +813,6 @@ void fm_create(void) {
   s_text_w = panel_w - 12 - 18 - 4;
   if (s_text_w < 40) s_text_w = 40;
 
-  lv_group_remove_all_objs(g_ui.input_group);
-  ui_chrome_detach(&s_chrome);
-  lv_obj_clean(g_ui.screen);
   ui_theme_apply_screen(g_ui.screen);
 
   s_chrome = ui_chrome_create(g_ui.screen, "Files");

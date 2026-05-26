@@ -41,8 +41,8 @@
 - **A**：打开 — 进目录 / 播放音频 / 其它文件显示 Info
 - **B**：菜单 — **Info**（名称、类型、大小/目录项数）、**Delete**（确认后删除）
 - **音频播放**：支持 WAV (PCM16/Float32) 与 MP3；支持歌单自动连播与循环模式；底部状态栏显示播放中
-- 大数组用 **`static`**（如 `fm_entry_t s_entries[FM_MAX_ENTRIES]`），避免 main task 栈溢出
-- **限制**：单目录支持最多 **256** 个条目 (`FM_MAX_ENTRIES`)，音乐播放列表支持最多 **256** 首歌曲 (`AUDIO_PLAYLIST_MAX`)
+- **内存优化**：大数组（`s_entries` 和 `s_playlist`）改为**动态分配 (malloc)**。这避开了 ESP32 的静态 DRAM 限制，允许支持更多条目。
+- **限制**：单目录支持最多 **512** 个条目 (`FM_MAX_ENTRIES`)，音乐播放列表支持最多 **512** 首歌曲 (`AUDIO_PLAYLIST_MAX`)
 
 ### Settings
 
@@ -105,7 +105,7 @@ idf.py flash monitor
 
 - 固件约 **~1MB 级**（Debug 构建）；移除 WiFi/LVGL 外最大头仍是 **LVGL** 与 **ESP-IDF 基础库**。
 - RAM：LVGL 双缓冲 ~30KB + CONFIG_LV_MEM_SIZE 32KB + WiFi 关闭后显著减轻。
-- BSS 占用：文件管理条目约 **33KB** (`FM_MAX_ENTRIES=256`)，音频播放列表约 **32KB** (`AUDIO_PLAYLIST_MAX=256`)。
+- 动态内存：文件管理 (`s_entries`) 和音频列表 (`s_playlist`) 现在使用堆内存。单项 512 条目时，每个模块各需约 **64-68KB** 堆空间。由于二者不在同一时间段分配，实际峰值占用约为 68KB 左右。这成功解决了之前 `.dram0.bss` 溢出的问题。
 
 ## 与上游 README 的差异
 

@@ -6,13 +6,14 @@
 #include "ui_settings.h"
 #include "ui_chrome.h"
 #include "ui_theme.h"
+#include "esp_log.h"
 #include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
-#define AUDIO_PLAYLIST_MAX 256
+#define AUDIO_PLAYLIST_MAX 512
 #define AUDIO_PATH_MAX     256
 #define AUDIO_VOL_HOLD_MS_INITIAL 400
 #define AUDIO_VOL_HOLD_MS_REPEAT  80
@@ -24,7 +25,7 @@ typedef enum {
   PLAY_MODE_COUNT,
 } play_mode_t;
 
-static char s_playlist[AUDIO_PLAYLIST_MAX][FM_NAME_LEN];
+static char (*s_playlist)[FM_NAME_LEN] = NULL;
 static int  s_playlist_count;
 static int  s_current_index;
 static char s_current_path[AUDIO_PATH_MAX];
@@ -273,6 +274,14 @@ static void preview_audio_play_index(int idx) {
 /* ------------------------------------------------------------------ open */
 
 static bool preview_audio_open(const char *path, preview_open_args_t *args) {
+  if (!s_playlist) {
+    s_playlist = malloc(AUDIO_PLAYLIST_MAX * FM_NAME_LEN);
+    if (!s_playlist) {
+      ESP_LOGE("preview_audio", "Failed to allocate memory for s_playlist");
+      return false;
+    }
+  }
+
   preview_audio_build_playlist(args->cwd, path);
 
   ui_chrome_detach(&s_chrome);
@@ -377,11 +386,21 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
 /* ------------------------------------------------------------------ close */
 
 static void preview_audio_close(void) {
+  audio_stop_playback();
+  /* Wait for audio task to exit to free its 32KB stack. */
+  TickType_t start = xTaskGetTickCount();
+  while (audio_is_playing() && (xTaskGetTickCount() - start) < pdMS_TO_TICKS(500)) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+
+  if (s_playlist) {
+    free(s_playlist);
+    s_playlist = NULL;
+  }
   if (s_backlight_off) {
     lcd_set_brightness(s_backlight_restore);
     s_backlight_off = false;
   }
-  audio_stop_playback();
   ui_chrome_detach(&s_chrome);
   preview_audio_vol_hold_reset();
   s_active        = false;
