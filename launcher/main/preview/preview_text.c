@@ -6,6 +6,9 @@
 #include "settings.h"
 #include "misc/lv_text_private.h"
 #include "lcd.h"
+#include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +16,8 @@
 #include <sys/stat.h>
 
 #include "../text/gb2312_uni.inc"
+
+static const char *TAG = "preview_text";
 
 #define TEXT_RAW_MAX          (256 * 1024)
 #define TEXT_PAGE_MAX         4096
@@ -62,20 +67,38 @@ static size_t utf8_encode(uint32_t cp, char *out) {
   out[0] = (char)(0xF0 | (cp >> 18)); out[1] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (char)(0x80 | (cp & 0x3F)); return 4;
 }
 
-static char *decode_text(const uint8_t *raw, size_t len, size_t *out_len) {
-  if (len >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) { raw += 3; len -= 3; }
-  if (is_utf8(raw, len)) {
-    char *out = malloc(len + 1);
-    if (!out) return NULL;
-    memcpy(out, raw, len);
-    out[len] = '\0';
-    for (size_t i = 0; i < len; i++) if (out[i] == '\r') out[i] = '\n';
-    *out_len = len;
-    return out;
+static char *decode_text(uint8_t *raw, size_t len, size_t *out_len) {
+  if (len >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) { 
+    memmove(raw, raw + 3, len - 3);
+    len -= 3; 
   }
+
+  if (is_utf8(raw, len)) {
+    ESP_LOGI(TAG, "Decoding as UTF-8 (in-place), len: %zu", len);
+    for (size_t i = 0; i < len; i++) if (raw[i] == '\r') raw[i] = '\n';
+    raw[len] = '\0';
+    *out_len = len;
+    return (char *)raw;
+  }
+
   /* GB2312 fallback */
-  char *out = malloc(len * 3 + 1);
-  if (!out) return NULL;
+  ESP_LOGI(TAG, "Decoding as GB2312, len: %zu", len);
+  
+  /* 1. Calculate exact required size to save RAM. 
+   * GB2312 (2 bytes) -> UTF-8 (3 bytes) is 1.5x max. 
+   */
+  size_t required = 0;
+  for (size_t i = 0; i < len; ) {
+    if (raw[i] < 0x80) { required++; i++; }
+    else { required += 3; i += 2; }
+  }
+
+  char *out = malloc(required + 1);
+  if (!out) { 
+    ESP_LOGE(TAG, "Failed to malloc for GB2312 decode (needed %zu)", required); 
+    return NULL; 
+  }
+
   size_t o = 0, i = 0;
   while (i < len) {
     if (raw[i] < 0x80) { out[o++] = (raw[i] == '\r' ? '\n' : (char)raw[i]); i++; }
@@ -86,6 +109,7 @@ static char *decode_text(const uint8_t *raw, size_t len, size_t *out_len) {
     } else { out[o++] = '?'; i++; }
   }
   out[o] = '\0'; *out_len = o;
+  ESP_LOGI(TAG, "GB2312 decoded, new len: %zu", o);
   return out;
 }
 
@@ -102,6 +126,7 @@ static int text_build_pages(text_doc_t *doc, lv_coord_t max_w, lv_coord_t max_h)
   lv_coord_t line_h = lv_font_get_line_height(font) + TEXT_LINE_SPACE;
   int max_lines = max_h / (line_h > 0 ? line_h : 14);
   if (max_lines < 1) max_lines = 1;
+  ESP_LOGI(TAG, "Building pages: w=%d, h=%d, max_lines=%d", max_w, max_h, max_lines);
 
   lv_text_attributes_t attr;
   lv_text_attributes_init(&attr);
@@ -110,14 +135,14 @@ static int text_build_pages(text_doc_t *doc, lv_coord_t max_w, lv_coord_t max_h)
 
   int cap = 64, pages = 0;
   uint32_t *off = malloc(cap * sizeof(uint32_t));
-  if (!off) return -1;
+  if (!off) { ESP_LOGE(TAG, "Failed to malloc for page offsets"); return -1; }
 
   size_t pos = 0;
   while (pos <= doc->utf8_len) {
     if (pages >= cap) {
       cap *= 2;
       uint32_t *n = realloc(off, cap * sizeof(uint32_t));
-      if (!n) { free(off); return -1; }
+      if (!n) { ESP_LOGE(TAG, "Failed to realloc for page offsets"); free(off); return -1; }
       off = n;
     }
     off[pages++] = (uint32_t)pos;
@@ -129,6 +154,7 @@ static int text_build_pages(text_doc_t *doc, lv_coord_t max_w, lv_coord_t max_h)
     }
   }
   doc->page_off = off; doc->page_count = pages; doc->cur_page = 0;
+  ESP_LOGI(TAG, "Total pages: %d", pages);
   return 0;
 }
 
@@ -165,18 +191,83 @@ static bool preview_text_can_open(const char *path) {
 
 static bool preview_text_load(const char *path, text_doc_t *doc, lv_coord_t w, lv_coord_t h) {
   struct stat st;
-  if (stat(path, &st) != 0 || st.st_size == 0) return false;
-  size_t sz = (st.st_size > TEXT_RAW_MAX) ? TEXT_RAW_MAX : st.st_size;
+  if (stat(path, &st) != 0 || st.st_size == 0) {
+    ESP_LOGE(TAG, "stat failed or file empty: %s", path);
+    return false;
+  }
+
+  size_t full_sz = (size_t)st.st_size;
+  uint32_t free_heap = (uint32_t)esp_get_free_heap_size();
+  
+  /* 
+   * Strategy:
+   * 1. UTF-8 is in-place, so it needs ~ sz bytes.
+   * 2. GB2312 needs sz (raw) + sz * 1.5 (decoded) = 2.5 * sz bytes.
+   * We don't know the encoding yet, so we read a small header first.
+   */
   FILE *f = fopen(path, "rb");
-  if (!f) return false;
-  uint8_t *raw = malloc(sz);
-  if (!raw) { fclose(f); return false; }
+  if (!f) { ESP_LOGE(TAG, "fopen failed: %s", path); return false; }
+
+  uint8_t header[1024];
+  size_t header_len = fread(header, 1, sizeof(header), f);
+  bool maybe_utf8 = is_utf8(header, header_len);
+  fseek(f, 0, SEEK_SET);
+
+  size_t sz_limit = maybe_utf8 ? (free_heap - 24576) : (free_heap / 4);
+  if (sz_limit > TEXT_RAW_MAX) sz_limit = TEXT_RAW_MAX;
+
+  size_t sz = (full_sz > sz_limit) ? sz_limit : full_sz;
+  
+  ESP_LOGI(TAG, "Loading file: %s, size: %zu, maybe_utf8: %d, heap free: %u, target sz: %zu", 
+           path, full_sz, maybe_utf8, free_heap, sz);
+
+retry_load:
+  uint8_t *raw = NULL;
+  while (sz >= 1024) {
+    raw = malloc(sz + 1);
+    if (raw) break;
+    sz -= 4096;
+  }
+
+  if (!raw) {
+    ESP_LOGE(TAG, "Failed to malloc raw buffer, heap free: %u", (unsigned)esp_get_free_heap_size());
+    fclose(f);
+    return false;
+  }
+
+  if (sz < full_sz) {
+    ESP_LOGW(TAG, "File too large for heap, loading only first %zu bytes", sz);
+  }
+
+  fseek(f, 0, SEEK_SET);
   size_t n = fread(raw, 1, sz, f);
   fclose(f);
-  doc->utf8 = decode_text(raw, n, &doc->utf8_len);
-  free(raw);
-  if (!doc->utf8) return false;
-  if (text_build_pages(doc, w, h) != 0) { text_doc_free(doc); return false; }
+
+  memset(doc, 0, sizeof(*doc));
+  char *decoded = decode_text(raw, n, &doc->utf8_len);
+  if (!decoded) {
+    /* If decode_text failed due to OOM, retry with a smaller chunk. */
+    free(raw);
+    if (sz > 4096) {
+      sz /= 2;
+      ESP_LOGW(TAG, "Decode failed (likely OOM), retrying with sz=%zu", sz);
+      f = fopen(path, "rb");
+      if (f) goto retry_load;
+    }
+    ESP_LOGE(TAG, "decode_text failed");
+    return false;
+  }
+
+  doc->utf8 = decoded;
+  if (decoded != (char *)raw) {
+    free(raw);
+  }
+  
+  if (text_build_pages(doc, w, h) != 0) {
+    ESP_LOGE(TAG, "text_build_pages failed");
+    text_doc_free(doc);
+    return false;
+  }
   return true;
 }
 
@@ -205,10 +296,14 @@ static void preview_text_page_hold_tick(const input_gamepad_state *gp) {
 }
 
 static bool preview_text_open(const char *path, preview_open_args_t *args) {
+  ESP_LOGI(TAG, "Opening text preview: %s", path);
   lv_coord_t top = ui_chrome_body_top() + 2;
   s_page_w = 290; s_page_h = LCD_HEIGHT - top - 22;
   text_doc_t pending;
-  if (!preview_text_load(path, &pending, s_page_w, s_page_h)) return false;
+  if (!preview_text_load(path, &pending, s_page_w, s_page_h)) {
+    ESP_LOGE(TAG, "Failed to load text document");
+    return false;
+  }
   text_doc_free(&s_doc); s_doc = pending;
   ui_chrome_detach(&s_chrome); lv_obj_clean(args->screen); ui_theme_apply_screen(args->screen);
   s_chrome = ui_chrome_create(args->screen, fm_base_name(path));
