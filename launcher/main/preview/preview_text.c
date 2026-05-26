@@ -223,10 +223,15 @@ static bool preview_text_load(const char *path, text_doc_t *doc, lv_coord_t w, l
 
 retry_load:
   uint8_t *raw = NULL;
-  while (sz >= 1024) {
-    raw = malloc(sz + 1);
-    if (raw) break;
-    sz -= 4096;
+  size_t attempt_sz = sz;
+  while (attempt_sz > 0) {
+    raw = malloc(attempt_sz + 1);
+    if (raw) {
+      sz = attempt_sz;
+      break;
+    }
+    if (attempt_sz <= 4096) break;
+    attempt_sz -= 4096;
   }
 
   if (!raw) {
