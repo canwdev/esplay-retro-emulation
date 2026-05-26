@@ -59,6 +59,12 @@ static uint32_t s_position_ms;
 static uint32_t s_duration_ms;
 static uint32_t s_sample_rate;
 static bool s_track_is_mp3;
+static volatile audio_track_type_t s_track_type;
+static volatile uint16_t s_track_channels;
+static volatile uint16_t s_track_bits_per_sample;
+static volatile uint16_t s_track_bitrate_kbps;
+static volatile bool s_track_is_float;
+static volatile bool s_track_mp3_vbr;
 
 typedef struct {
   uint16_t num_channels;
@@ -90,7 +96,24 @@ static uint32_t read_u32_le(const uint8_t *p) {
 #define WAV_SUBFORMAT_IEEE_FLOAT_LE32 0x00000003u
 
 static int16_t apply_volume_i16(int16_t sample) {
-  return (int16_t)((int32_t)sample * (int32_t)s_volume / 100);
+  int32_t v = (int32_t)s_volume;
+  if (v <= 0)
+    return 0;
+  if (v >= 100)
+    return sample;
+
+  int32_t s = (int32_t)sample;
+  int32_t scaled = s * v;
+  if (scaled >= 0)
+    scaled = (scaled + 50) / 100;
+  else
+    scaled = (scaled - 50) / 100;
+
+  if (scaled > 32767)
+    scaled = 32767;
+  else if (scaled < -32768)
+    scaled = -32768;
+  return (int16_t)scaled;
 }
 
 static int16_t float_sample_to_i16(float x) {
@@ -665,6 +688,14 @@ static esp_err_t stream_mp3_body(FILE *f, long file_size) {
     if (!mp3_frame_info_valid(&info, samples))
       continue;
     got_audio_frame = true;
+    if (s_track_channels == 0)
+      s_track_channels = (uint16_t)info.channels;
+    if (info.bitrate_kbps > 0) {
+      if (s_track_bitrate_kbps == 0)
+        s_track_bitrate_kbps = (uint16_t)info.bitrate_kbps;
+      else if (s_track_bitrate_kbps != (uint16_t)info.bitrate_kbps)
+        s_track_mp3_vbr = true;
+    }
 
     /* ---- I2S setup on first valid frame ---- */
     if (!rate_set) {
@@ -712,6 +743,12 @@ static esp_err_t play_wav_file(FILE *f) {
 
   s_active_wi = wi;
   s_track_is_mp3 = false;
+  s_track_type = AUDIO_TRACK_TYPE_WAV;
+  s_track_channels = wi.num_channels;
+  s_track_bits_per_sample = wi.bits_per_sample;
+  s_track_bitrate_kbps = 0;
+  s_track_is_float = wi.is_ieee_float;
+  s_track_mp3_vbr = false;
   s_wav_position_bytes = 0;
   s_duration_ms = wav_bytes_to_ms(&wi, wi.data_size);
   s_position_ms = 0;
@@ -735,6 +772,12 @@ static esp_err_t play_mp3_file(FILE *f) {
     return ESP_FAIL;
 
   s_track_is_mp3 = true;
+  s_track_type = AUDIO_TRACK_TYPE_MP3;
+  s_track_channels = 0;
+  s_track_bits_per_sample = 16;
+  s_track_bitrate_kbps = 0;
+  s_track_is_float = false;
+  s_track_mp3_vbr = false;
   s_sample_rate = 0;
   s_duration_ms = 0;
   s_position_ms = 0;
@@ -869,6 +912,25 @@ void audio_seek_seconds(int delta) {
 uint32_t audio_get_position_ms(void) { return s_position_ms; }
 
 uint32_t audio_get_duration_ms(void) { return s_duration_ms; }
+
+bool audio_get_track_info(audio_track_info_t *out) {
+  if (!out)
+    return false;
+
+  audio_track_info_t ti = { 0 };
+  ti.type = s_track_type;
+  if (ti.type == AUDIO_TRACK_TYPE_NONE)
+    ti.type = s_track_is_mp3 ? AUDIO_TRACK_TYPE_MP3 : AUDIO_TRACK_TYPE_WAV;
+
+  ti.sample_rate_hz   = s_sample_rate;
+  ti.channels         = s_track_channels;
+  ti.bits_per_sample  = s_track_bits_per_sample;
+  ti.bitrate_kbps     = s_track_bitrate_kbps;
+  ti.is_float         = s_track_is_float;
+  ti.mp3_vbr          = s_track_mp3_vbr;
+  *out = ti;
+  return true;
+}
 
 void audio_play_file_async(const char *path) {
   if (!path)

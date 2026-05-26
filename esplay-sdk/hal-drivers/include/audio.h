@@ -32,6 +32,24 @@ void audio_seek_seconds(int delta);
 uint32_t audio_get_position_ms(void);
 uint32_t audio_get_duration_ms(void);
 
+typedef enum {
+  AUDIO_TRACK_TYPE_NONE = 0,
+  AUDIO_TRACK_TYPE_WAV,
+  AUDIO_TRACK_TYPE_MP3,
+} audio_track_type_t;
+
+typedef struct {
+  audio_track_type_t type;
+  uint32_t sample_rate_hz;
+  uint16_t channels;
+  uint16_t bits_per_sample;
+  uint16_t bitrate_kbps;
+  bool     is_float;
+  bool     mp3_vbr;
+} audio_track_info_t;
+
+bool audio_get_track_info(audio_track_info_t *out);
+
 #ifdef __cplusplus
 }
 #endif

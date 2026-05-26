@@ -34,6 +34,7 @@ static bool s_active;
 
 static ui_chrome_t s_chrome;
 static lv_obj_t *s_filename_label;
+static lv_obj_t *s_tech_label;
 static lv_obj_t *s_track_label;
 static lv_obj_t *s_time_label;
 static lv_obj_t *s_status_label;
@@ -50,6 +51,13 @@ static bool      s_last_paused;
 static bool      s_last_playing;
 static int       s_last_track_index;
 static int       s_last_track_count;
+static audio_track_type_t s_last_track_type;
+static uint32_t  s_last_sample_rate_hz;
+static uint16_t  s_last_channels;
+static uint16_t  s_last_bits_per_sample;
+static uint16_t  s_last_bitrate_kbps;
+static bool      s_last_is_float;
+static bool      s_last_mp3_vbr;
 static play_mode_t s_play_mode;
 /* Set true once the current track is confirmed playing; cleared on track end
  * or when a new track is started, to gate auto-advance triggering. */
@@ -193,6 +201,65 @@ static void preview_audio_update_ui(bool force) {
     s_last_paused  = paused;
     s_last_playing = playing;
   }
+
+  if (s_tech_label && lv_obj_is_valid(s_tech_label)) {
+    audio_track_info_t ti;
+    if (audio_get_track_info(&ti)) {
+      bool changed = force || ti.type != s_last_track_type ||
+                     ti.sample_rate_hz != s_last_sample_rate_hz ||
+                     ti.channels != s_last_channels ||
+                     ti.bits_per_sample != s_last_bits_per_sample ||
+                     ti.bitrate_kbps != s_last_bitrate_kbps ||
+                     ti.is_float != s_last_is_float ||
+                     ti.mp3_vbr != s_last_mp3_vbr;
+      if (changed) {
+        uint32_t sr10  = ti.sample_rate_hz / 100;
+        uint32_t sr_i  = sr10 / 10;
+        uint32_t sr_f  = sr10 % 10;
+        if (ti.type == AUDIO_TRACK_TYPE_MP3) {
+          if (ti.bitrate_kbps > 0 && ti.mp3_vbr)
+            lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %ukbps VBR %uch",
+                                  (unsigned long)sr_i, (unsigned long)sr_f,
+                                  (unsigned)ti.bitrate_kbps,
+                                  (unsigned)ti.channels);
+          else if (ti.bitrate_kbps > 0)
+            lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %ukbps %uch",
+                                  (unsigned long)sr_i, (unsigned long)sr_f,
+                                  (unsigned)ti.bitrate_kbps,
+                                  (unsigned)ti.channels);
+          else
+            lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %uch",
+                                  (unsigned long)sr_i, (unsigned long)sr_f,
+                                  (unsigned)ti.channels);
+        } else if (ti.type == AUDIO_TRACK_TYPE_WAV) {
+          if (ti.is_float && ti.bits_per_sample > 0)
+            lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz F%u %uch",
+                                  (unsigned long)sr_i, (unsigned long)sr_f,
+                                  (unsigned)ti.bits_per_sample,
+                                  (unsigned)ti.channels);
+          else if (ti.bits_per_sample > 0)
+            lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz %ub %uch",
+                                  (unsigned long)sr_i, (unsigned long)sr_f,
+                                  (unsigned)ti.bits_per_sample,
+                                  (unsigned)ti.channels);
+          else
+            lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz %uch",
+                                  (unsigned long)sr_i, (unsigned long)sr_f,
+                                  (unsigned)ti.channels);
+        } else {
+          lv_label_set_text(s_tech_label, "");
+        }
+
+        s_last_track_type      = ti.type;
+        s_last_sample_rate_hz  = ti.sample_rate_hz;
+        s_last_channels        = ti.channels;
+        s_last_bits_per_sample = ti.bits_per_sample;
+        s_last_bitrate_kbps    = ti.bitrate_kbps;
+        s_last_is_float        = ti.is_float;
+        s_last_mp3_vbr         = ti.mp3_vbr;
+      }
+    }
+  }
 }
 
 static void preview_audio_vol_hold_reset(void) {
@@ -295,29 +362,45 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   lv_obj_t *card = lv_obj_create(args->screen);
   lv_obj_remove_style_all(card);
   ui_theme_style_panel(card);
-  lv_obj_set_size(card, 308, 118);
-  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 4);
+  lv_obj_set_size(card, 308, 140);
+  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 2);
   lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_all(card, 8, 0);
-  lv_obj_set_style_pad_row(card, 4, 0);
+  lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START);
+  lv_obj_set_style_pad_all(card, 4, 0);
+  lv_obj_set_style_pad_row(card, 0, 0);
 
   s_filename_label = lv_label_create(card);
   lv_obj_set_width(s_filename_label, 288);
+  lv_obj_set_height(s_filename_label, 36);
   lv_label_set_long_mode(s_filename_label, LV_LABEL_LONG_MODE_WRAP);
   lv_label_set_text(s_filename_label, fm_base_name(path));
   ui_theme_style_label_primary(s_filename_label);
 
-  s_status_label = lv_label_create(card);
+  s_tech_label = lv_label_create(card);
+  lv_obj_set_width(s_tech_label, 288);
+  lv_label_set_long_mode(s_tech_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+  lv_label_set_text(s_tech_label, "");
+  ui_theme_style_label_secondary(s_tech_label);
+
+  lv_obj_t *status_row = lv_obj_create(card);
+  lv_obj_remove_style_all(status_row);
+  lv_obj_set_width(status_row, 288);
+  lv_obj_set_flex_flow(status_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(status_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(status_row, 4, 0);
+
+
+  s_track_label = lv_label_create(status_row);
+  lv_label_set_text(s_track_label, "1 / 1");
+  ui_theme_style_label_secondary(s_track_label);
+  
+  s_status_label = lv_label_create(status_row);
   lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
   ui_theme_style_label_primary(s_status_label);
 
-  s_track_label = lv_label_create(card);
-  lv_label_set_text(s_track_label, "1 / 1");
-  ui_theme_style_label_secondary(s_track_label);
-
-  s_mode_label = lv_label_create(card);
+  s_mode_label = lv_label_create(status_row);
   lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
   ui_theme_style_label_secondary(s_mode_label);
 
@@ -368,6 +451,13 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   s_last_playing    = false;
   s_last_track_index = -1;
   s_last_track_count = -1;
+  s_last_track_type = AUDIO_TRACK_TYPE_NONE;
+  s_last_sample_rate_hz = UINT32_MAX;
+  s_last_channels = UINT16_MAX;
+  s_last_bits_per_sample = UINT16_MAX;
+  s_last_bitrate_kbps = UINT16_MAX;
+  s_last_is_float = false;
+  s_last_mp3_vbr = false;
   s_track_confirmed_playing = false;
   preview_audio_vol_hold_reset();
 
@@ -394,6 +484,7 @@ static void preview_audio_close(void) {
   preview_audio_vol_hold_reset();
   s_active        = false;
   s_filename_label = NULL;
+  s_tech_label    = NULL;
   s_track_label   = NULL;
   s_time_label    = NULL;
   s_status_label  = NULL;
