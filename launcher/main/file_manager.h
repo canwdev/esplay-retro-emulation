@@ -24,7 +24,7 @@ int fm_entry_compare(const void *a, const void *b);
 
 void fm_create(void);
 void fm_on_nav_key(uint32_t lv_key);
-void fm_on_nav_hold_tick(bool up_held, bool down_held);
+void fm_on_nav_hold_tick(bool up, bool down, bool left, bool right);
 bool fm_uses_direct_nav(void);
 void fm_handle_back(void);
 void fm_handle_menu_on_focus(void);

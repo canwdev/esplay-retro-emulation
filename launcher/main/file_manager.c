@@ -646,6 +646,16 @@ void fm_on_nav_key(uint32_t key) {
     s_hold_armed   = true;
     s_hold_dir     = LV_KEY_DOWN;
     s_hold_next_ms = lv_tick_get() + FM_HOLD_MS_INITIAL;
+  } else if (key == LV_KEY_LEFT) {
+    fm_move_focus(-s_visible_rows);
+    s_hold_armed   = true;
+    s_hold_dir     = LV_KEY_LEFT;
+    s_hold_next_ms = lv_tick_get() + FM_HOLD_MS_INITIAL;
+  } else if (key == LV_KEY_RIGHT) {
+    fm_move_focus(s_visible_rows);
+    s_hold_armed   = true;
+    s_hold_dir     = LV_KEY_RIGHT;
+    s_hold_next_ms = lv_tick_get() + FM_HOLD_MS_INITIAL;
   } else if (key == LV_KEY_ENTER) {
     const char *name = NULL;
     const char *sym  = NULL;
@@ -654,20 +664,24 @@ void fm_on_nav_key(uint32_t key) {
   }
 }
 
-void fm_on_nav_hold_tick(bool up_held, bool down_held) {
+void fm_on_nav_hold_tick(bool up, bool down, bool left, bool right) {
   if (g_ui.current_page != PAGE_FILES || fm_has_open_dialog()) {
     fm_hold_reset();
     return;
   }
-  if (up_held && down_held)
-    return;
 
-  if (!up_held && !down_held) {
+  int held_count = (up ? 1 : 0) + (down ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
+  if (held_count != 1) {
     fm_hold_reset();
     return;
   }
 
-  uint32_t dir = up_held ? LV_KEY_UP : LV_KEY_DOWN;
+  uint32_t dir = 0;
+  if (up)    dir = LV_KEY_UP;
+  if (down)  dir = LV_KEY_DOWN;
+  if (left)  dir = LV_KEY_LEFT;
+  if (right) dir = LV_KEY_RIGHT;
+
   if (!s_hold_armed || s_hold_dir != dir) {
     s_hold_armed   = true;
     s_hold_dir     = dir;
@@ -679,7 +693,11 @@ void fm_on_nav_hold_tick(bool up_held, bool down_held) {
   if (now < s_hold_next_ms)
     return;
 
-  fm_move_focus(dir == LV_KEY_UP ? -1 : 1);
+  if (dir == LV_KEY_UP)         fm_move_focus(-1);
+  else if (dir == LV_KEY_DOWN)  fm_move_focus(1);
+  else if (dir == LV_KEY_LEFT)  fm_move_focus(-s_visible_rows);
+  else if (dir == LV_KEY_RIGHT) fm_move_focus(s_visible_rows);
+
   s_hold_next_ms = now + FM_HOLD_MS_REPEAT;
 }
 

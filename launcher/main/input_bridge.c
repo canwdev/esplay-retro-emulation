@@ -62,9 +62,15 @@ static void input_poll_timer_cb(lv_timer_t *t) {
       fm_on_nav_key(LV_KEY_UP);
     else if (edge[GAMEPAD_INPUT_DOWN])
       fm_on_nav_key(LV_KEY_DOWN);
+    else if (edge[GAMEPAD_INPUT_LEFT])
+      fm_on_nav_key(LV_KEY_LEFT);
+    else if (edge[GAMEPAD_INPUT_RIGHT])
+      fm_on_nav_key(LV_KEY_RIGHT);
     else
       fm_on_nav_hold_tick(gp.values[GAMEPAD_INPUT_UP] == 1,
-                          gp.values[GAMEPAD_INPUT_DOWN] == 1);
+                          gp.values[GAMEPAD_INPUT_DOWN] == 1,
+                          gp.values[GAMEPAD_INPUT_LEFT] == 1,
+                          gp.values[GAMEPAD_INPUT_RIGHT] == 1);
     if (edge[GAMEPAD_INPUT_A])
       fm_on_nav_key(LV_KEY_ENTER);
   }
