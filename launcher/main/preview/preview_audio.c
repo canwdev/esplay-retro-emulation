@@ -196,8 +196,11 @@ static void preview_audio_update_ui(bool force) {
       lv_label_set_text(s_status_label, LV_SYMBOL_PAUSE " Pause");
     else if (playing)
       lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
-    else
+    else {
       lv_label_set_text(s_status_label, LV_SYMBOL_STOP " Stop");
+      ESP_LOGW("preview_audio", "update_ui: trans to STOP! prev_paused=%d prev_playing=%d",
+               s_last_paused, s_last_playing);
+    }
     s_last_paused  = paused;
     s_last_playing = playing;
   }
@@ -315,11 +318,16 @@ static void preview_audio_arm_volume_hold(int8_t dir) {
 /* ------------------------------------------------------------------ playback */
 
 static void preview_audio_start_track(const char *path) {
+  bool was_playing = audio_is_playing();
+  ESP_LOGI("preview_audio", "start_track ENTER: path=%s was_playing=%d",
+           path, was_playing);
   strlcpy(s_current_path, path, sizeof(s_current_path));
   s_track_confirmed_playing = false;
   audio_play_file_async(path);
+  bool now_playing = audio_is_playing();
   if (s_filename_label && lv_obj_is_valid(s_filename_label))
     lv_label_set_text(s_filename_label, fm_base_name(path));
+  ESP_LOGI("preview_audio", "start_track EXIT: now_playing=%d", now_playing);
   preview_audio_update_ui(true);
 }
 
@@ -334,8 +342,9 @@ static void preview_audio_play_index(int idx) {
   char full[AUDIO_PATH_MAX];
   snprintf(full, sizeof(full), "%s/%s", fm_get_cwd(),
            s_playlist[s_current_index]);
-  
-  ESP_LOGI("preview_audio", "Playing index %d: %s", idx, s_playlist[idx]);
+
+  ESP_LOGI("preview_audio", "play_index idx=%d playlist=%s count=%d full=%s",
+           idx, s_playlist[idx], s_playlist_count, full);
   preview_audio_start_track(full);
 }
 
@@ -530,6 +539,8 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     return true;
   }
   if (edge[GAMEPAD_INPUT_START] || edge[GAMEPAD_INPUT_A]) {
+    bool p = audio_is_paused(), pl = audio_is_playing();
+    ESP_LOGI("preview_audio", "key: START/A toggle pause p=%d playing=%d", p, pl);
     audio_toggle_pause();
     preview_audio_update_ui(true);
     return true;
@@ -559,6 +570,8 @@ static void preview_audio_on_timer(void) {
 
   bool playing = audio_is_playing();
   bool paused  = audio_is_paused();
+  // ESP_LOGI("preview_audio", "timer: playing=%d paused=%d confirmed=%d",
+  //          playing, paused, s_track_confirmed_playing);
 
   /* Confirm that the current track has started (guard against the brief gap
    * between audio_play_file_async() and the play task setting s_playing). */
@@ -567,6 +580,8 @@ static void preview_audio_on_timer(void) {
 
   /* Detect natural track end and auto-advance according to play mode. */
   if (s_track_confirmed_playing && !playing && !paused) {
+    ESP_LOGI("preview_audio", "timer: track-end detected, mode=%d idx=%d cnt=%d",
+             s_play_mode, s_current_index, s_playlist_count);
     s_track_confirmed_playing = false;
     s_last_playing = false; /* prevent stale UI state triggering on next tick */
     switch (s_play_mode) {

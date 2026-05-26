@@ -3,6 +3,7 @@
 #include "driver/i2s_std.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
 #include <errno.h>
@@ -17,6 +18,10 @@
 #include "minimp3.h"
 
 static const char *TAG = "audio";
+
+#define AUDIO_TASK_STACK_WORDS   32768
+#define AUDIO_TASK_CREATE_RETRY   12
+#define AUDIO_TASK_CREATE_WAIT_MS 20
 
 #if CONFIG_AUDIO_AMP_GPIO >= 0
 static void amp_gpio_configure(void) {
@@ -49,6 +54,7 @@ static volatile uint8_t s_volume = 50;
 static volatile int32_t s_seek_delta_sec;
 static volatile bool s_seek_pending;
 static TaskHandle_t s_play_task;
+static SemaphoreHandle_t s_play_task_exited_sem;
 
 static int16_t s_stereo_expand[MINIMP3_MAX_SAMPLES_PER_FRAME * 2];
 static int16_t s_silence_buf[512];
@@ -700,6 +706,7 @@ static esp_err_t stream_mp3_body(FILE *f, long file_size) {
     /* ---- I2S setup on first valid frame ---- */
     if (!rate_set) {
       esp_err_t err = i2s_setup((uint32_t)info.hz);
+      ESP_LOGI(TAG, "i2s_setup hz=%d result=%s", info.hz, esp_err_to_name(err));
       if (err != ESP_OK)
         return err;
       s_sample_rate = (uint32_t)info.hz;
@@ -806,15 +813,19 @@ static void play_task(void *arg) {
   s_position_ms = 0;
   s_duration_ms = 0;
 
+  ESP_LOGI(TAG, "play_task START path=%s playing=%d", path, (int)s_playing);
+
   FILE *f = fopen(path, "rb");
   if (!f) {
-    ESP_LOGE(TAG, "fopen failed: %s errno=%d", path, errno);
+    ESP_LOGE(TAG, "play_task fopen failed: %s errno=%d", path, errno);
     free(path);
     goto done;
   }
 
   bool is_mp3 = path_is_mp3(path);
   free(path);
+
+  ESP_LOGI(TAG, "play_task before decode: is_mp3=%d s_stop=%d", is_mp3, (int)s_stop_requested);
 
   if (is_mp3 && (!s_mp3_dec || !s_mp3_buf)) {
     ESP_LOGE(TAG, "MP3 buffers not initialized");
@@ -827,6 +838,8 @@ static void play_task(void *arg) {
     err = play_mp3_file(f);
   else
     err = play_wav_file(f);
+
+  ESP_LOGI(TAG, "play_task after decode: err=%s s_stop=%d", esp_err_to_name(err), (int)s_stop_requested);
 
   if (err == ESP_ERR_NOT_SUPPORTED)
     ESP_LOGE(TAG, "Unsupported audio format");
@@ -841,6 +854,11 @@ done:
   s_playing = false;
   s_paused = false;
   s_play_task = NULL;
+  if (s_play_task_exited_sem) {
+    xSemaphoreGive(s_play_task_exited_sem);
+    s_play_task_exited_sem = NULL;
+  }
+  ESP_LOGI(TAG, "play_task DONE playing=%d", (int)s_playing);
   vTaskDelete(NULL);
 }
 
@@ -858,11 +876,20 @@ void audio_init(void) {
 static void audio_start_async(char *path_copy) {
   s_stop_requested = false;
   s_paused = false;
-  if (xTaskCreate(play_task, "audio_play", 32768, path_copy, 10, &s_play_task) !=
-      pdPASS) {
-    free(path_copy);
-    s_play_task = NULL;
+  for (int attempt = 0; attempt < AUDIO_TASK_CREATE_RETRY; attempt++) {
+    if (xTaskCreate(play_task, "audio_play", AUDIO_TASK_STACK_WORDS, path_copy,
+                    10, &s_play_task) == pdPASS) {
+      ESP_LOGI(TAG, "audio_start_async: task created, s_play_task=%p attempt=%d",
+               s_play_task, attempt + 1);
+      return;
+    }
+    ESP_LOGW(TAG, "audio_start_async: xTaskCreate retry %d/%d", attempt + 1,
+             AUDIO_TASK_CREATE_RETRY);
+    vTaskDelay(pdMS_TO_TICKS(AUDIO_TASK_CREATE_WAIT_MS));
   }
+  ESP_LOGE(TAG, "audio_start_async: xTaskCreate FAILED");
+  free(path_copy);
+  s_play_task = NULL;
 }
 
 void audio_stop_playback(void) { s_stop_requested = true; }
@@ -936,11 +963,20 @@ void audio_play_file_async(const char *path) {
   if (!path)
     return;
 
+  s_play_task_exited_sem = xSemaphoreCreateBinary();
   audio_stop_playback();
-  TickType_t wait = 0;
-  while (s_play_task && wait < pdMS_TO_TICKS(2000)) {
-    vTaskDelay(pdMS_TO_TICKS(10));
-    wait += pdMS_TO_TICKS(10);
+
+  if (s_play_task) {
+    if (s_play_task_exited_sem &&
+        xSemaphoreTake(s_play_task_exited_sem, pdMS_TO_TICKS(2000)) == pdTRUE) {
+      ESP_LOGI(TAG, "audio_play_file_async: old task exited cleanly");
+    } else {
+      ESP_LOGW(TAG, "audio_play_file_async: old task did not exit in 2s, forcing");
+    }
+  }
+  if (s_play_task_exited_sem) {
+    vSemaphoreDelete(s_play_task_exited_sem);
+    s_play_task_exited_sem = NULL;
   }
 
   size_t len = strlen(path) + 1;
