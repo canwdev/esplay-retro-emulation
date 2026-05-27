@@ -1,19 +1,25 @@
 #include "file_manager.h"
-#include "audio.h"
+#include "hal_audio.h"
+#include "hal_storage.h"
 #include "input_bridge.h"
 #include "preview.h"
+#include "platform_log.h"
+#include "platform_mem.h"
 #include "ui_app.h"
 #include "ui_chrome.h"
 #include "ui_home.h"
 #include "ui_font.h"
 #include "ui_theme.h"
-#include "esp_log.h"
-#include "esp_heap_caps.h"
-#include "esp_system.h"
 #include "lvgl.h"
+
+#ifdef TARGET_SIM
+#include "sim_compat.h"
+#endif
+
 #include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -74,6 +80,25 @@ static const char *fm_entry_symbol(const char *name, bool is_dir);
 static void fm_virtual_sync_rows(void);
 static void fm_update_status_label(void);
 static bool fm_build_path(char *out, size_t out_sz, const char *name);
+
+static const char *fm_root(void) {
+  const char *root = hal_storage_root();
+  return (root && root[0]) ? root : "/sd";
+}
+
+static bool fm_is_root(void) {
+  return strcmp(fm_cwd, fm_root()) == 0;
+}
+
+static bool fm_has_root_prefix(const char *path) {
+  const char *root = fm_root();
+  size_t root_len = strlen(root);
+  if (strncmp(path, root, root_len) != 0)
+    return false;
+  if (path[root_len] == '\0')
+    return true;
+  return path[root_len] == '/';
+}
 
 static bool fm_dirent_get_type(const struct dirent *de, bool *out_is_dir) {
   if (!de || !out_is_dir)
@@ -199,27 +224,27 @@ static bool fm_build_path(char *out, size_t out_sz, const char *name) {
   int n = snprintf(out, out_sz, "%s/%s", fm_cwd, name);
   if (n < 0 || (size_t)n >= out_sz)
     return false;
-  if (strncmp(out, "/sd", 3) != 0)
+  if (!fm_has_root_prefix(out))
     return false;
   return true;
 }
 
 static void fm_go_parent(void) {
   fm_normalize_cwd();
-  if (strcmp(fm_cwd, "/sd") == 0)
+  if (fm_is_root())
     return;
   char *slash = strrchr(fm_cwd, '/');
   if (slash && slash != fm_cwd)
     *slash = '\0';
   else
-    strlcpy(fm_cwd, "/sd", sizeof(fm_cwd));
+    strlcpy(fm_cwd, fm_root(), sizeof(fm_cwd));
   fm_normalize_cwd();
-  if (strlen(fm_cwd) < 3)
-    strlcpy(fm_cwd, "/sd", sizeof(fm_cwd));
+  if (!fm_has_root_prefix(fm_cwd))
+    strlcpy(fm_cwd, fm_root(), sizeof(fm_cwd));
 }
 
 void fm_reset_cwd(void) {
-  strlcpy(fm_cwd, "/sd", sizeof(fm_cwd));
+  strlcpy(fm_cwd, fm_root(), sizeof(fm_cwd));
   fm_normalize_cwd();
   fm_restore_focus = false;
 }
@@ -310,7 +335,7 @@ static int fm_logical_index_by_name(const char *name) {
 }
 
 static void fm_go_home(void) {
-  audio_stop_playback();
+  hal_audio_stop();
   input_bridge_block_enter_until_release();
   ui_home_create();
 }
@@ -345,7 +370,7 @@ static void fm_remember_focus(void) {
 }
 
 static void fm_remember_child_for_parent(void) {
-  if (strcmp(fm_cwd, "/sd") == 0)
+  if (fm_is_root())
     return;
   const char *name = fm_base_name(fm_cwd);
   if (!name || name[0] == '\0')
@@ -653,7 +678,7 @@ static void fm_open_by_name(const char *name) {
 
   struct stat st;
   if (stat(full, &st) != 0) {
-    ESP_LOGW(TAG, "stat failed for %s", full);
+    platform_log(PLATFORM_LOG_WARN, TAG, "stat failed for %s", full);
     return;
   }
 
@@ -779,14 +804,14 @@ void fm_handle_back(void) {
   }
 
   fm_normalize_cwd();
-  if (strcmp(fm_cwd, "/sd") != 0) {
+  if (!fm_is_root()) {
     fm_remember_child_for_parent();
     fm_go_parent();
     fm_create();
     return;
   }
 
-  audio_stop_playback();
+  hal_audio_stop();
   fm_go_home();
 }
 
@@ -805,9 +830,10 @@ static const char *fm_entry_symbol(const char *name, bool is_dir) {
 
 void fm_create(void) {
   if (!g_ui.input_group || !g_ui.screen) {
-    ESP_LOGE(TAG, "UI state not initialized");
+    platform_log(PLATFORM_LOG_ERROR, TAG, "UI state not initialized");
     return;
   }
+  platform_log(PLATFORM_LOG_INFO, TAG, "fm_create cwd=%s", fm_cwd[0] ? fm_cwd : "(empty)");
 
   /* 1. Close preview first to trigger memory cleanup (like s_playlist and audio stack). */
   if (preview_is_active()) {
@@ -818,6 +844,7 @@ void fm_create(void) {
   lv_group_remove_all_objs(g_ui.input_group);
   ui_chrome_detach(&s_chrome);
   lv_obj_clean(g_ui.screen);
+  platform_log(PLATFORM_LOG_DEBUG, TAG, "screen cleaned");
 
   if (s_entries) {
     free(s_entries);
@@ -868,7 +895,7 @@ void fm_create(void) {
   for (int i = 0; i < s_visible_rows; i++)
     fm_create_vrow(&s_vrows[i], s_list_panel);
 
-  s_show_back = (strcmp(fm_cwd, "/sd") == 0);
+  s_show_back = fm_is_root();
   s_show_up   = !s_show_back;
   s_open_err  = false;
   s_logical_count = 0;
@@ -877,9 +904,10 @@ void fm_create(void) {
   if (s_show_up)
     s_logical_count++;
 
+  platform_log(PLATFORM_LOG_INFO, TAG, "opening dir: %s", fm_cwd);
   DIR *dir = opendir(fm_cwd);
   if (!dir) {
-    ESP_LOGW(TAG, "opendir failed: %s", fm_cwd);
+    platform_log(PLATFORM_LOG_WARN, TAG, "opendir failed: %s", fm_cwd);
     s_open_err = true;
     s_logical_count++;
   } else {
@@ -890,16 +918,17 @@ void fm_create(void) {
       if (fm_dirent_get_type(de, &is_dir))
         want++;
     }
+    platform_log(PLATFORM_LOG_INFO, TAG, "dir entries=%u", (unsigned)want);
 
     if (want > 0) {
       size_t alloc_sz = want * sizeof(fm_entry_t);
       s_entries = malloc(alloc_sz);
       if (!s_entries) {
-        ESP_LOGE(TAG,
-                 "Failed to allocate %u bytes for %u entries (Free Heap: %u, Max Block: %u)",
-                 (unsigned)alloc_sz, (unsigned)want,
-                 (unsigned)esp_get_free_heap_size(),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        platform_log(
+            PLATFORM_LOG_ERROR, TAG,
+            "Failed to allocate %u bytes for %u entries (Free Heap: %u, Max Block: %u)",
+            (unsigned)alloc_sz, (unsigned)want, (unsigned)platform_free_heap(),
+            (unsigned)platform_largest_free_block());
         closedir(dir);
         return;
       }
@@ -919,6 +948,7 @@ void fm_create(void) {
     if (s_entries && n > 0)
       qsort(s_entries, n, sizeof(s_entries[0]), fm_entry_compare);
     s_logical_count += (int)n;
+    platform_log(PLATFORM_LOG_INFO, TAG, "loaded entries=%u", (unsigned)n);
   }
 
   if (fm_restore_focus) {
@@ -939,6 +969,7 @@ void fm_create(void) {
   lv_obj_align(fm_status_size_label, LV_ALIGN_BOTTOM_RIGHT, -8, -2);
 
   fm_virtual_sync_rows();
+  platform_log(PLATFORM_LOG_DEBUG, TAG, "virtual rows synced");
 
   fm_hold_reset();
 

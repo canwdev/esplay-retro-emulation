@@ -100,27 +100,32 @@ static void screen_test_build_gamut(void) {
   lv_obj_set_style_pad_all(root, 0, 0);
   lv_obj_set_style_border_width(root, 0, 0);
 
+  // 1. 彩虹色相行 (Hue Row) - H 范围 0~360, S/V 固定为最高 100
   lv_obj_t *hue_row = screen_test_add_row(root, 120);
   for (int i = 0; i < 36; i++) {
     uint16_t hue = (uint16_t)(i * 360 / 36);
-    screen_test_add_strip(hue_row, lv_color_hsv_to_rgb(hue, 255, 255));
+    screen_test_add_strip(hue_row, lv_color_hsv_to_rgb(hue, 100, 100));
   }
 
+  // 2. 标准强色彩条行 (Bar Row) - 使用 Hex 确保完全纯色
   static const uint32_t bars[] = {0xFF0000, 0x00FF00, 0x0000FF, 0x00FFFF,
                                   0xFF00FF, 0xFFFF00, 0xFFFFFF};
   lv_obj_t *bar_row = screen_test_add_row(root, 56);
-  for (size_t i = 0; i < sizeof(bars) / sizeof(bars[0]); i++)
+  for (size_t i = 0; i < sizeof(bars) / sizeof(bars[0]); i++) {
     screen_test_add_strip(bar_row, lv_color_hex(bars[i]));
-
-  lv_obj_t *sat_row = screen_test_add_row(root, 56);
-  for (int i = 0; i < 16; i++) {
-    uint8_t sat = (uint8_t)(i * 255 / 15);
-    screen_test_add_strip(sat_row, lv_color_hsv_to_rgb(200, sat, 255));
   }
 
+  // 3. 饱和度渐变行 (Saturation Row) - S 范围从 0 渐变到 100
+  lv_obj_t *sat_row = screen_test_add_row(root, 56);
+  for (int i = 0; i < 16; i++) {
+    uint8_t sat = (uint8_t)(i * 100 / 15);
+    screen_test_add_strip(sat_row, lv_color_hsv_to_rgb(200, sat, 100));
+  }
+
+  // 4. 明度渐变行 (Value Row) - V 范围从 0 渐变到 100
   lv_obj_t *val_row = screen_test_add_row(root, 56);
   for (int i = 0; i < 16; i++) {
-    uint8_t val = (uint8_t)(i * 255 / 15);
+    uint8_t val = (uint8_t)(i * 100 / 15);
     screen_test_add_strip(val_row, lv_color_hsv_to_rgb(0, 0, val));
   }
 }

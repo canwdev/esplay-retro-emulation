@@ -1,6 +1,8 @@
 #include "hal_display.h"
 #include "hal_input.h"
+#include "hal_storage.h"
 #include "input_bridge.h"
+#include "platform_log.h"
 #include "platform_time.h"
 #include "ui_app.h"
 #include "ui_backlight.h"
@@ -14,7 +16,40 @@
 #include <SDL.h>
 #include <stdbool.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+static LONG WINAPI sim_unhandled_exception_filter(EXCEPTION_POINTERS *info) {
+  DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
+  platform_log(PLATFORM_LOG_ERROR, "crash", "Unhandled exception 0x%08lx", (unsigned long)code);
+
+  void *frames[32] = {0};
+  USHORT n = CaptureStackBackTrace(0, 32, frames, NULL);
+  for (USHORT i = 0; i < n; i++) {
+    platform_log(PLATFORM_LOG_ERROR, "crash", "bt[%u]=%p", (unsigned)i, frames[i]);
+  }
+
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 ui_state_t g_ui = {0};
+
+#if LV_USE_LOG
+static void lvgl_log_cb(lv_log_level_t level, const char *buf) {
+  int out = PLATFORM_LOG_INFO;
+  if (level <= LV_LOG_LEVEL_ERROR)
+    out = PLATFORM_LOG_ERROR;
+  else if (level == LV_LOG_LEVEL_WARN)
+    out = PLATFORM_LOG_WARN;
+  else if (level == LV_LOG_LEVEL_INFO)
+    out = PLATFORM_LOG_INFO;
+  else
+    out = PLATFORM_LOG_DEBUG;
+  platform_log(out, "lvgl", "%s", buf ? buf : "");
+}
+#endif
 
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area,
                           uint8_t *px_map) {
@@ -26,13 +61,32 @@ int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
 
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
+  platform_log(PLATFORM_LOG_INFO, "sim", "launcher_sim starting");
+
+#ifdef _WIN32
+  SetUnhandledExceptionFilter(sim_unhandled_exception_filter);
+#endif
+
+  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
+    platform_log(PLATFORM_LOG_ERROR, "sim", "SDL_Init failed: %s",
+                 SDL_GetError());
     return 1;
+  }
 
   hal_display_init();
   hal_input_init();
+  if (!hal_storage_mount()) {
+    platform_log(PLATFORM_LOG_WARN, "sim", "storage root not found: %s",
+                 hal_storage_root());
+  } else {
+    platform_log(PLATFORM_LOG_INFO, "sim", "storage root: %s",
+                 hal_storage_root());
+  }
 
   lv_init();
+#if LV_USE_LOG
+  lv_log_register_print_cb(lvgl_log_cb);
+#endif
   ui_theme_init();
 
   lv_display_t *disp = lv_display_create(HAL_DISPLAY_WIDTH, HAL_DISPLAY_HEIGHT);

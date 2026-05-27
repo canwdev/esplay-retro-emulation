@@ -51,9 +51,11 @@ static void btn_event_handler(lv_event_t *e) {
     home_update_selected_label(obj);
   } else if (code == LV_EVENT_CLICKED) {
     if (obj == g_ui.home_btn_files) {
+      platform_log(PLATFORM_LOG_INFO, TAG, "enter Files");
       fm_reset_cwd();
       fm_create();
     } else if (obj == g_ui.home_btn_settings) {
+      platform_log(PLATFORM_LOG_INFO, TAG, "enter Settings");
       ui_settings_create();
     }
   }

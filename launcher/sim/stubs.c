@@ -1,4 +1,3 @@
-#include "file_manager.h"
 #include "preview.h"
 #include "ui_app.h"
 #include "ui_backlight.h"
@@ -44,69 +43,18 @@ bool preview_on_key(const input_gamepad_state *gp, const bool edge[]) {
 void preview_on_timer(void) {
 }
 
+bool preview_can_open(const char *path) {
+  (void)path;
+  return false;
+}
+
+bool preview_open_for_path(const char *path, preview_open_args_t *args) {
+  (void)path;
+  (void)args;
+  return false;
+}
+
 void preview_close(void) {
-}
-
-bool fm_uses_direct_nav(void) {
-  return false;
-}
-
-void fm_on_nav_key(uint32_t lv_key) {
-  (void)lv_key;
-}
-
-void fm_on_nav_hold_tick(bool up, bool down, bool left, bool right) {
-  (void)up;
-  (void)down;
-  (void)left;
-  (void)right;
-}
-
-void fm_handle_back(void) {
-  if (g_ui.current_page == PAGE_FILES)
-    ui_home_create();
-}
-
-void fm_handle_menu_on_focus(void) {
-}
-
-bool fm_close_top_dialog(void) {
-  return false;
-}
-
-bool fm_has_open_dialog(void) {
-  return false;
-}
-
-void fm_reset_cwd(void) {
-}
-
-static void files_back_to_home_cb(lv_event_t *e) {
-  if (lv_event_get_code(e) == LV_EVENT_CLICKED)
-    ui_home_create();
-}
-
-void fm_create(void) {
-  lv_group_remove_all_objs(g_ui.input_group);
-  ui_chrome_detach(&s_settings_chrome);
-  lv_obj_clean(g_ui.screen);
-  ui_theme_apply_screen(g_ui.screen);
-
-  s_settings_chrome = ui_chrome_create(g_ui.screen, "Files");
-
-  lv_obj_t *btn = lv_button_create(g_ui.screen);
-  ui_theme_style_btn(btn);
-  lv_obj_set_size(btn, 220, 40);
-  lv_obj_align(btn, LV_ALIGN_CENTER, 0, 0);
-  lv_obj_add_event_cb(btn, files_back_to_home_cb, LV_EVENT_ALL, NULL);
-  lv_obj_t *label = lv_label_create(btn);
-  lv_label_set_text(label, "Not implemented");
-  lv_obj_center(label);
-
-  lv_group_add_obj(g_ui.input_group, btn);
-  lv_group_focus_obj(btn);
-
-  g_ui.current_page = PAGE_FILES;
 }
 
 void ui_settings_detach_ui(void) {

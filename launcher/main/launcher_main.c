@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gamepad.h"
+#include "hal_storage.h"
 #include "input_bridge.h"
 #include "lcd.h"
 #include "lvgl.h"
@@ -118,7 +119,7 @@ static void init_lvgl_display(void) {
   ui_home_create();
 }
 
-static void init_ui(void) { sdcard_open("/sd"); }
+static void init_ui(void) { hal_storage_mount(); }
 
 static void run_main_loop(void) {
   TickType_t xLast = xTaskGetTickCount();

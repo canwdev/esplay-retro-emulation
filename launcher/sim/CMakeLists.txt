@@ -31,9 +31,12 @@ FetchContent_MakeAvailable(lvgl)
 
 add_executable(launcher_sim
   main.c
+  ../port/sim/dirent.c
+  ../port/sim/hal_audio_stub.c
   ../port/sim/hal_display_sdl.c
   ../port/sim/hal_input_sdl.c
   ../port/sim/hal_power_stub.c
+  ../port/sim/hal_storage_posix.c
   ../port/sim/platform_log_sim.c
   ../port/sim/platform_mem_sim.c
   ../port/sim/platform_time_sim.c
@@ -45,10 +48,11 @@ add_executable(launcher_sim
   ../main/ui_home.c
   ../main/ui_screen_test.c
   ../main/input_bridge.c
+  ../main/file_manager.c
 )
 
 target_compile_definitions(launcher_sim PRIVATE TARGET_SIM)
-target_include_directories(launcher_sim PRIVATE ../main ../main/preview ../hal)
+target_include_directories(launcher_sim PRIVATE ../main ../main/preview ../hal ../port/sim)
 target_link_libraries(launcher_sim PRIVATE lvgl SDL2::SDL2)
 
 if(WIN32)

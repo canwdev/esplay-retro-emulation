@@ -1,6 +1,6 @@
-# Launcher PC Simulator (Phase 1)
+# Launcher PC Simulator (Phase 2)
 
-本目录提供一个基于 **SDL2 + LVGL 9.4** 的 PC Simulator，用于在桌面端快速验证 Launcher 的 UI（Home / Theme / Screen Test）与键盘输入映射。
+本目录提供一个基于 **SDL2 + LVGL 9.4** 的 PC Simulator，用于在桌面端快速验证 Launcher 的 UI（Home / File Manager / Theme / Screen Test）与键盘输入映射。
 
 ## 构建（Windows / PowerShell）
 
@@ -39,11 +39,22 @@ cd d:\Projects\dev-hardware\esplay-neo-firmware\launcher\sim
 页面行为：
 
 - Home：左右切换 Files / Settings，A 进入
-- Settings（Phase 1 stub）：包含 “Screen Test” 与 “Back”
+- Files：浏览 `.\testdata\sd\`（映射为 SD 根目录），B 返回上级或回 Home
+- Settings（stub）：包含 “Screen Test” 与 “Back”
 - Screen Test：←/→ 切换 pattern，B 返回
 
-## 说明与限制（Phase 1）
+## 文件数据（testdata）
+
+- SD 根目录映射为：`launcher\sim\testdata\sd\`
+- 大目录回归（生成 512 文件）：
+
+```powershell
+cd d:\Projects\dev-hardware\esplay-neo-firmware\launcher\sim
+.\testdata\generate_many.ps1
+```
+
+## 说明与限制（Phase 2）
 
 - 本 Simulator 只用于 UI 快速迭代，不替代真机验证（ILI9341 观感、音频、GPIO/手柄等仍需真机）。
-- Files / Preview / Backlight / Settings 的完整逻辑将在后续 Phase 逐步迁移；当前为最小 stub 以便 Home/Screen Test 可跑通。
+- Phase 2 重点是 File Manager 与目录浏览；Preview 仍为 stub（后续 Phase 再接文本/音频预览）。
 - 本目录独立于 ESP-IDF 构建系统，不参与 `launcher/idf.py build`。
