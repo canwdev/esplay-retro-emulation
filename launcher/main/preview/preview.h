@@ -1,7 +1,7 @@
 #ifndef PREVIEW_H
 #define PREVIEW_H
 
-#include "gamepad.h"
+#include "hal_input.h"
 #include "lvgl.h"
 #include <stdbool.h>
 

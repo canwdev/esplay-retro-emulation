@@ -1,6 +1,6 @@
 #include "input_bridge.h"
 #include "file_manager.h"
-#include "gamepad.h"
+#include "hal_input.h"
 #include "preview.h"
 #include "ui_app.h"
 #include "ui_home.h"
@@ -25,7 +25,8 @@ static bool input_edge(const input_gamepad_state *cur, int idx) {
 static void input_poll_timer_cb(lv_timer_t *t) {
   (void)t;
   input_gamepad_state gp;
-  gamepad_read(&gp);
+  hal_input_poll();
+  hal_input_read(&gp);
 
   bool any_pressed = false;
   for (int i = 0; i < GAMEPAD_INPUT_MAX; i++) {
@@ -123,7 +124,8 @@ void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {
   }
 
   input_gamepad_state gamepad_state;
-  gamepad_read(&gamepad_state);
+  hal_input_poll();
+  hal_input_read(&gamepad_state);
 
   data->state = LV_INDEV_STATE_RELEASED;
 

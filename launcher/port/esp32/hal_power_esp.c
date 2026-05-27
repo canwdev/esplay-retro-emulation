@@ -15,6 +15,6 @@ bool hal_power_read_battery(hal_battery_t *out) {
 
   out->millivolts = s.millivolts;
   out->percentage = s.percentage;
-  out->charging = (s.state == CHARGING) ? 1 : 0;
+  out->charging = (s.state == CHARGING || s.state == FULL_CHARGED) ? 1 : 0;
   return true;
 }

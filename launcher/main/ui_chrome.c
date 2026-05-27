@@ -1,7 +1,7 @@
 #include "ui_chrome.h"
 #include "ui_font.h"
 #include "ui_theme.h"
-#include "power.h"
+#include "hal_power.h"
 #include "lvgl.h"
 
 #define UI_CHROME_BAR_H    16
@@ -10,9 +10,10 @@
 
 static lv_obj_t *s_active_battery;
 
-static void ui_chrome_battery_symbol(battery_state *bat, char *out, size_t out_sz) {
+static void ui_chrome_battery_symbol(const hal_battery_t *bat, char *out,
+                                     size_t out_sz) {
   const char *sym;
-  if (bat->state == FULL_CHARGED || bat->state == CHARGING)
+  if (bat->charging)
     sym = LV_SYMBOL_CHARGE;
   else if (bat->percentage > 75)
     sym = LV_SYMBOL_BATTERY_FULL;
@@ -91,8 +92,9 @@ void ui_chrome_update_battery(void) {
   if (!s_active_battery || !lv_obj_is_valid(s_active_battery))
     return;
 
-  battery_state bat;
-  battery_level_read(&bat);
+  hal_battery_t bat;
+  if (!hal_power_read_battery(&bat))
+    return;
 
   char sym[8];
   ui_chrome_battery_symbol(&bat, sym, sizeof(sym));

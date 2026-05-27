@@ -1,11 +1,11 @@
 #include "ui_home.h"
 #include "file_manager.h"
-#include "lcd.h"
+#include "hal_display.h"
+#include "platform_log.h"
 #include "ui_app.h"
 #include "ui_chrome.h"
 #include "ui_settings.h"
 #include "ui_theme.h"
-#include "esp_log.h"
 #include "lvgl.h"
 #include <string.h>
 
@@ -23,7 +23,7 @@ static void home_update_selected_label(lv_obj_t *obj) {
   if (!g_ui.menu_selected_label)
     return;
   if (obj == g_ui.home_btn_files)
-    lv_label_set_text(g_ui.menu_selected_label, "Files");
+    lv_label_set_text(g_ui.menu_selected_label, "File Manager");
   else if (obj == g_ui.home_btn_settings)
     lv_label_set_text(g_ui.menu_selected_label, "Settings");
 }
@@ -47,7 +47,7 @@ static void btn_event_handler(lv_event_t *e) {
     else if (obj == g_ui.home_btn_settings)
       s_last_home_tile = HOME_TILE_SETTINGS;
     else
-      ESP_LOGW(TAG, "Unknown button focused");
+      platform_log(PLATFORM_LOG_WARN, TAG, "Unknown button focused");
     home_update_selected_label(obj);
   } else if (code == LV_EVENT_CLICKED) {
     if (obj == g_ui.home_btn_files) {
@@ -92,7 +92,7 @@ static lv_obj_t *create_home_tile(lv_obj_t *parent, const char *symbol,
 
 void ui_home_create(void) {
   if (!g_ui.input_group || !g_ui.screen) {
-    ESP_LOGE(TAG, "UI state not initialized");
+    platform_log(PLATFORM_LOG_ERROR, TAG, "UI state not initialized");
     return;
   }
 
@@ -108,7 +108,7 @@ void ui_home_create(void) {
   lv_obj_t *center = lv_obj_create(g_ui.screen);
   lv_obj_remove_style_all(center);
   lv_obj_set_width(center, LV_PCT(100));
-  lv_obj_set_height(center, LCD_HEIGHT - body_top);
+  lv_obj_set_height(center, HAL_DISPLAY_HEIGHT - body_top);
   lv_obj_align(center, LV_ALIGN_BOTTOM_MID, 0, 0);
   lv_obj_set_flex_flow(center, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(center, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
@@ -118,7 +118,7 @@ void ui_home_create(void) {
   lv_obj_set_style_pad_row(center, 12, 0);
 
   g_ui.menu_selected_label = lv_label_create(center);
-  lv_label_set_text(g_ui.menu_selected_label, "Files");
+  lv_label_set_text(g_ui.menu_selected_label, "File Manager");
   ui_theme_style_label_accent(g_ui.menu_selected_label);
 
   lv_obj_t *row = lv_obj_create(center);
@@ -132,7 +132,7 @@ void ui_home_create(void) {
   lv_obj_set_style_border_width(row, 0, 0);
 
   g_ui.home_btn_files =
-      create_home_tile(row, LV_SYMBOL_SD_CARD, "Files");
+      create_home_tile(row, LV_SYMBOL_SD_CARD, "File Manager");
   g_ui.home_btn_settings =
       create_home_tile(row, LV_SYMBOL_SETTINGS, "Settings");
 

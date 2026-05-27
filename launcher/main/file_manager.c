@@ -845,7 +845,7 @@ void fm_create(void) {
 
   ui_theme_apply_screen(g_ui.screen);
 
-  s_chrome = ui_chrome_create(g_ui.screen, "Files");
+  s_chrome = ui_chrome_create(g_ui.screen, "File Manager");
 
   lv_obj_t *path_label = lv_label_create(g_ui.screen);
   lv_label_set_long_mode(path_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
