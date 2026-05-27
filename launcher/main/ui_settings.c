@@ -225,16 +225,6 @@ static void settings_add_info_block(lv_obj_t *parent, const char *title,
 }
 
 static int32_t settings_migrate_theme(int32_t theme) {
-  if (theme >= 0 && theme <= 1)
-    return theme;
-  if (theme == 2)
-    return UI_THEME_RED_DARK;
-  if (theme == 3)
-    return UI_THEME_YELLOW_DARK;
-  if (theme == 4)
-    return UI_THEME_PURPLE_DARK;
-  if (theme == 5)
-    return UI_THEME_BLUE_DARK;
   if (theme >= 0 && theme < UI_THEME_COUNT)
     return theme;
   return UI_THEME_DARK;
