@@ -88,9 +88,9 @@ static void settings_update_row_labels(void) {
     lv_obj_t *lbl = lv_obj_get_child(s_row_btns[ROW_BACKLIGHT_TIMEOUT], 0);
     if (lbl) {
       if (s_backlight_timeout == 0)
-        lv_label_set_text(lbl, LV_SYMBOL_EYE_OPEN " Auto Off: Never");
+        lv_label_set_text(lbl, LV_SYMBOL_EYE_OPEN " Screen Off: Never");
       else
-        lv_label_set_text_fmt(lbl, LV_SYMBOL_EYE_OPEN " Auto Off: %lds",
+        lv_label_set_text_fmt(lbl, LV_SYMBOL_EYE_OPEN " Screen Off: %lds",
                               (long)s_backlight_timeout);
     }
   }
@@ -343,13 +343,13 @@ void ui_settings_create(void) {
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_THEME]);
 
   s_row_btns[ROW_BACKLIGHT_TIMEOUT] =
-      settings_add_row(scroll, LV_SYMBOL_EYE_OPEN " Auto Off");
+      settings_add_row(scroll, LV_SYMBOL_EYE_OPEN " Screen Off");
   lv_obj_add_event_cb(s_row_btns[ROW_BACKLIGHT_TIMEOUT],
                       settings_row_event_handler, LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_BACKLIGHT_TIMEOUT]);
 
   s_row_btns[ROW_RESTART] =
-      settings_add_row(scroll, LV_SYMBOL_REFRESH " Restart");
+      settings_add_row(scroll, LV_SYMBOL_REFRESH " Reboot");
   lv_obj_add_event_cb(s_row_btns[ROW_RESTART], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_RESTART]);

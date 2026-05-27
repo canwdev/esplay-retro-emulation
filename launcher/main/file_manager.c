@@ -73,6 +73,42 @@ static void fm_apply_dialog_font(lv_obj_t *obj);
 static const char *fm_entry_symbol(const char *name, bool is_dir);
 static void fm_virtual_sync_rows(void);
 static void fm_update_status_label(void);
+static bool fm_build_path(char *out, size_t out_sz, const char *name);
+
+static bool fm_dirent_get_type(const struct dirent *de, bool *out_is_dir) {
+  if (!de || !out_is_dir)
+    return false;
+  if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+    return false;
+
+  if (de->d_type == DT_DIR) {
+    *out_is_dir = true;
+    return true;
+  }
+  if (de->d_type == DT_REG) {
+    *out_is_dir = false;
+    return true;
+  }
+  if (de->d_type != DT_UNKNOWN)
+    return false;
+
+  char probe[FM_PATH_MAX];
+  if (!fm_build_path(probe, sizeof(probe), de->d_name))
+    return false;
+
+  struct stat st;
+  if (stat(probe, &st) != 0)
+    return false;
+  if (S_ISDIR(st.st_mode)) {
+    *out_is_dir = true;
+    return true;
+  }
+  if (S_ISREG(st.st_mode)) {
+    *out_is_dir = false;
+    return true;
+  }
+  return false;
+}
 
 typedef struct {
   const char *symbol;
@@ -783,15 +819,9 @@ void fm_create(void) {
   ui_chrome_detach(&s_chrome);
   lv_obj_clean(g_ui.screen);
 
-  /* 3. Allocate memory for entries. */
-  if (!s_entries) {
-    s_entries = malloc(FM_MAX_ENTRIES * sizeof(fm_entry_t));
-    if (!s_entries) {
-      ESP_LOGE(TAG, "Failed to allocate memory for s_entries (Free Heap: %u, Max Block: %u)",
-               (unsigned)esp_get_free_heap_size(),
-               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-      return;
-    }
+  if (s_entries) {
+    free(s_entries);
+    s_entries = NULL;
   }
 
   fm_normalize_cwd();
@@ -853,38 +883,41 @@ void fm_create(void) {
     s_open_err = true;
     s_logical_count++;
   } else {
-    size_t n = 0;
+    size_t want = 0;
     struct dirent *de;
-    while ((de = readdir(dir)) != NULL && n < FM_MAX_ENTRIES) {
-      if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+    bool is_dir;
+    while ((de = readdir(dir)) != NULL && want < FM_MAX_ENTRIES) {
+      if (fm_dirent_get_type(de, &is_dir))
+        want++;
+    }
+
+    if (want > 0) {
+      size_t alloc_sz = want * sizeof(fm_entry_t);
+      s_entries = malloc(alloc_sz);
+      if (!s_entries) {
+        ESP_LOGE(TAG,
+                 "Failed to allocate %u bytes for %u entries (Free Heap: %u, Max Block: %u)",
+                 (unsigned)alloc_sz, (unsigned)want,
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        closedir(dir);
+        return;
+      }
+      rewinddir(dir);
+    }
+
+    size_t n = 0;
+    while (s_entries && (de = readdir(dir)) != NULL && n < want) {
+      if (!fm_dirent_get_type(de, &is_dir))
         continue;
       strlcpy(s_entries[n].name, de->d_name, FM_NAME_LEN);
-
-      if (de->d_type == DT_DIR) {
-        s_entries[n].is_dir = true;
-      } else if (de->d_type == DT_REG) {
-        s_entries[n].is_dir = false;
-      } else if (de->d_type == DT_UNKNOWN) {
-        char probe[FM_PATH_MAX];
-        if (!fm_build_path(probe, sizeof(probe), de->d_name))
-          continue;
-        struct stat ost;
-        if (stat(probe, &ost) != 0)
-          continue;
-        if (S_ISDIR(ost.st_mode))
-          s_entries[n].is_dir = true;
-        else if (S_ISREG(ost.st_mode))
-          s_entries[n].is_dir = false;
-        else
-          continue;
-      } else {
-        continue;
-      }
+      s_entries[n].is_dir = is_dir;
       n++;
     }
     closedir(dir);
     s_entry_count = n;
-    qsort(s_entries, n, sizeof(s_entries[0]), fm_entry_compare);
+    if (s_entries && n > 0)
+      qsort(s_entries, n, sizeof(s_entries[0]), fm_entry_compare);
     s_logical_count += (int)n;
   }
 
