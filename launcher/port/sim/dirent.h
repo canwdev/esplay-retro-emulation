@@ -15,7 +15,7 @@
 #endif
 
 struct dirent {
-  char d_name[260];
+  char d_name[512];
   uint8_t d_type;
 };
 
