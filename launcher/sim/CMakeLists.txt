@@ -36,7 +36,9 @@ add_executable(launcher_sim
   ../port/sim/hal_display_sdl.c
   ../port/sim/hal_input_sdl.c
   ../port/sim/hal_power_stub.c
+  ../port/sim/hal_settings_file.c
   ../port/sim/hal_storage_posix.c
+  ../port/sim/hal_system_sim.c
   ../port/sim/platform_log_sim.c
   ../port/sim/platform_mem_sim.c
   ../port/sim/platform_time_sim.c
@@ -46,7 +48,9 @@ add_executable(launcher_sim
   ../main/ui_theme.c
   ../main/ui_chrome.c
   ../main/ui_home.c
+  ../main/ui_settings.c
   ../main/ui_screen_test.c
+  ../main/ui_backlight.c
   ../main/input_bridge.c
   ../main/file_manager.c
 )

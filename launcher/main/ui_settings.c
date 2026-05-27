@@ -1,21 +1,25 @@
 #include "ui_settings.h"
-#include "audio.h"
-#include "lcd.h"
-#include "settings.h"
+#include "hal_audio.h"
+#include "hal_display.h"
+#include "hal_power.h"
+#include "hal_settings.h"
+#include "hal_storage.h"
+#include "hal_system.h"
+#include "platform_log.h"
 #include "ui_app.h"
 #include "ui_backlight.h"
 #include "ui_chrome.h"
 #include "ui_home.h"
 #include "ui_screen_test.h"
 #include "ui_theme.h"
-#include "esp_app_desc.h"
-#include "esp_log.h"
-#include "esp_system.h"
 #include "lvgl.h"
-#include "power.h"
-#include "sdcard.h"
 #include <stdio.h>
 #include <string.h>
+
+#ifdef TARGET_ESP32
+#include "esp_app_desc.h"
+#include "esp_system.h"
+#endif
 
 static const char *TAG = "ui_settings";
 
@@ -44,21 +48,21 @@ static int32_t s_backlight_timeout = 30;
 static ui_chrome_t s_chrome;
 
 static void settings_save_backlight_timeout(void) {
-  settings_save(SettingBacklightTimeout, s_backlight_timeout);
+  hal_settings_save(SettingBacklightTimeout, s_backlight_timeout);
 }
 
 static void settings_save_brightness(void) {
-  settings_save(SettingBacklight, s_brightness);
-  lcd_set_brightness((uint8_t)s_brightness);
+  hal_settings_save(SettingBacklight, s_brightness);
+  hal_display_set_brightness((uint8_t)s_brightness);
 }
 
 static void settings_save_volume(void) {
-  settings_save(SettingAudioVolume, s_volume);
-  audio_set_volume((uint8_t)s_volume);
+  hal_settings_save(SettingAudioVolume, s_volume);
+  hal_audio_set_volume((uint8_t)s_volume);
 }
 
 static void settings_save_theme(void) {
-  settings_save(SettingUiTheme, s_theme);
+  hal_settings_save(SettingUiTheme, s_theme);
   ui_theme_set((int)s_theme);
 }
 
@@ -179,7 +183,7 @@ static void settings_row_event_handler(lv_event_t *e) {
   if (obj == s_row_btns[ROW_BACK])
     ui_home_create();
   else if (obj == s_row_btns[ROW_RESTART])
-    esp_restart();
+    hal_system_reboot();
   else if (obj == s_row_btns[ROW_SCREEN_TEST]) {
     s_focus_row = ROW_SCREEN_TEST;
     if (s_scroll)
@@ -240,7 +244,7 @@ void ui_settings_sync_volume(uint8_t volume) {
   if (volume > 100)
     volume = 100;
   s_volume = volume;
-  settings_save(SettingAudioVolume, s_volume);
+  hal_settings_save(SettingAudioVolume, s_volume);
   settings_update_row_labels();
 }
 
@@ -250,13 +254,13 @@ void ui_settings_detach_ui(void) {
 }
 
 void ui_settings_load_persisted(void) {
-  if (settings_load(SettingBacklight, &s_brightness) != 0)
+  if (hal_settings_load(SettingBacklight, &s_brightness) != 0)
     s_brightness = 70;
-  if (settings_load(SettingAudioVolume, &s_volume) != 0)
+  if (hal_settings_load(SettingAudioVolume, &s_volume) != 0)
     s_volume = 50;
-  if (settings_load(SettingUiTheme, &s_theme) != 0)
+  if (hal_settings_load(SettingUiTheme, &s_theme) != 0)
     s_theme = 0;
-  if (settings_load(SettingBacklightTimeout, &s_backlight_timeout) != 0)
+  if (hal_settings_load(SettingBacklightTimeout, &s_backlight_timeout) != 0)
     s_backlight_timeout = 30;
   s_theme = settings_migrate_theme(s_theme);
 
@@ -271,14 +275,14 @@ void ui_settings_load_persisted(void) {
   if (s_theme < 0 || s_theme >= UI_THEME_COUNT)
     s_theme = 0;
 
-  lcd_set_brightness((uint8_t)s_brightness);
-  audio_set_volume((uint8_t)s_volume);
+  hal_display_set_brightness((uint8_t)s_brightness);
+  hal_audio_set_volume((uint8_t)s_volume);
   ui_theme_set((int)s_theme);
 }
 
 void ui_settings_create(void) {
   if (!g_ui.input_group || !g_ui.screen) {
-    ESP_LOGE(TAG, "UI state not initialized");
+    platform_log(PLATFORM_LOG_ERROR, TAG, "UI state not initialized");
     return;
   }
 
@@ -364,17 +368,16 @@ void ui_settings_create(void) {
 
   char storage_body[96];
   uint32_t tot = 0, free_space = 0;
-  sdcard_get_free_space(&tot, &free_space);
+  hal_storage_get_free_kb(&tot, &free_space);
   snprintf(storage_body, sizeof(storage_body), "Total %lu MB\nFree %lu MB",
            (unsigned long)tot / 1024, (unsigned long)free_space / 1024);
   settings_add_info_block(scroll, LV_SYMBOL_SD_CARD " Storage", storage_body);
 
-  battery_state bat;
-  battery_level_read(&bat);
-  const char *charge_status =
-      (bat.state == CHARGING)       ? "Charging"
-      : (bat.state == FULL_CHARGED) ? "Fully Charged"
-                                    : "Discharging";
+  hal_battery_t bat = {0};
+  const char *charge_status = "Unknown";
+  if (hal_power_read_battery(&bat)) {
+    charge_status = bat.charging ? "Charging" : "Discharging";
+  }
   char battery_body[96];
   snprintf(battery_body, sizeof(battery_body),
            "Status: %s\nVoltage: %d mV\nLevel: %d%%", charge_status,
@@ -382,13 +385,18 @@ void ui_settings_create(void) {
   settings_add_info_block(scroll, LV_SYMBOL_BATTERY_2 " Battery", battery_body);
 
   char about_body[160];
+#ifdef TARGET_ESP32
   const esp_app_desc_t *desc = esp_app_get_description();
   if (desc) {
     snprintf(about_body, sizeof(about_body), "Launcher %s\nIDF %s\nBuilt %s %s",
              desc->version, desc->idf_ver, desc->date, desc->time);
   } else {
-    strlcpy(about_body, "Launcher\nVersion info unavailable", sizeof(about_body));
+    snprintf(about_body, sizeof(about_body), "Launcher\nVersion info unavailable");
   }
+#else
+  snprintf(about_body, sizeof(about_body), "Launcher Sim\n%s",
+           hal_system_app_version());
+#endif
   settings_add_info_block(scroll, LV_SYMBOL_SETTINGS " About", about_body);
 
   lv_obj_t *hint = lv_label_create(g_ui.screen);

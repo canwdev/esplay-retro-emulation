@@ -9,6 +9,7 @@ static SDL_Renderer *s_renderer;
 static SDL_Texture *s_texture;
 static uint16_t *s_fb;
 static bool s_inited;
+static uint8_t s_brightness = 100;
 
 void hal_display_init(void) {
   if (s_inited)
@@ -66,11 +67,15 @@ void hal_display_flush(int x1, int y1, int x2, int y2, uint8_t *rgb565) {
   }
 
   SDL_UpdateTexture(s_texture, NULL, s_fb, HAL_DISPLAY_WIDTH * 2);
+  uint8_t c = (uint8_t)((uint16_t)s_brightness * 255U / 100U);
+  SDL_SetTextureColorMod(s_texture, c, c, c);
   SDL_RenderClear(s_renderer);
   SDL_RenderCopy(s_renderer, s_texture, NULL, NULL);
   SDL_RenderPresent(s_renderer);
 }
 
 void hal_display_set_brightness(uint8_t pct) {
-  (void)pct;
+  if (pct > 100)
+    pct = 100;
+  s_brightness = pct;
 }

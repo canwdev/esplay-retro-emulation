@@ -8,6 +8,7 @@
 #include "ui_backlight.h"
 #include "ui_font.h"
 #include "ui_home.h"
+#include "ui_settings.h"
 #include "ui_theme.h"
 
 #include "lvgl.h"
@@ -88,6 +89,7 @@ int main(int argc, char **argv) {
   lv_log_register_print_cb(lvgl_log_cb);
 #endif
   ui_theme_init();
+  ui_settings_load_persisted();
 
   lv_display_t *disp = lv_display_create(HAL_DISPLAY_WIDTH, HAL_DISPLAY_HEIGHT);
   static lv_color_t fb[HAL_DISPLAY_WIDTH * HAL_DISPLAY_HEIGHT];
