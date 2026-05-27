@@ -525,6 +525,33 @@ static void fm_update_status_label(void) {
     return;
   }
 
+#ifdef TARGET_SIM
+  bool is_dir = false;
+  bool is_reg = false;
+  unsigned long size = 0;
+  unsigned long winerr = 0;
+  if (!sim_path_get_info_utf8(full, &is_dir, &is_reg, &size, &winerr)) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "stat failed for %s (winerr=%lu)", full,
+                 winerr);
+    lv_label_set_text(fm_status_size_label, "");
+    return;
+  }
+
+  if (is_dir) {
+    lv_label_set_text(fm_status_size_label, "Folder");
+    return;
+  }
+
+  if (is_reg) {
+    char sz[32];
+    fm_format_size(sz, sizeof(sz), (unsigned long)size);
+    lv_label_set_text(fm_status_size_label, sz);
+    return;
+  }
+
+  lv_label_set_text(fm_status_size_label, "");
+  return;
+#else
   struct stat st;
   if (stat(full, &st) != 0) {
     lv_label_set_text(fm_status_size_label, "");
@@ -539,6 +566,7 @@ static void fm_update_status_label(void) {
   char sz[32];
   fm_format_size(sz, sizeof(sz), (unsigned long)st.st_size);
   lv_label_set_text(fm_status_size_label, sz);
+#endif
 }
 
 static void fm_mbox_closed_cb(lv_event_t *e) {
@@ -610,7 +638,15 @@ static void fm_delete_cancel_cb(lv_event_t *e) { fm_dialog_close_cb(e); }
 
 static void fm_delete_confirm_cb(lv_event_t *e) {
   (void)e;
+#ifdef TARGET_SIM
+  unsigned long winerr = 0;
+  if (!sim_delete_utf8(fm_delete_path, &winerr)) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "delete failed: %s (winerr=%lu)",
+                 fm_delete_path, winerr);
+  }
+#else
   unlink(fm_delete_path);
+#endif
   if (fm_open_mbox)
     lv_msgbox_close(fm_open_mbox);
 }
@@ -676,6 +712,31 @@ static void fm_open_by_name(const char *name) {
   if (!fm_build_path(full, sizeof(full), name))
     return;
 
+#ifdef TARGET_SIM
+  bool is_dir = false;
+  bool is_reg = false;
+  unsigned long size = 0;
+  unsigned long winerr = 0;
+  if (!sim_path_get_info_utf8(full, &is_dir, &is_reg, &size, &winerr)) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "stat failed for %s (winerr=%lu)", full,
+                 winerr);
+    return;
+  }
+
+  if (is_dir) {
+    strlcpy(fm_cwd, full, sizeof(fm_cwd));
+    fm_normalize_cwd();
+    fm_restore_focus = false;
+    fm_create();
+    return;
+  }
+
+  if (is_reg) {
+    if (preview_can_open(full))
+      fm_open_preview(full);
+  }
+  return;
+#else
   struct stat st;
   if (stat(full, &st) != 0) {
     platform_log(PLATFORM_LOG_WARN, TAG, "stat failed for %s", full);
@@ -694,6 +755,7 @@ static void fm_open_by_name(const char *name) {
     if (preview_can_open(full))
       fm_open_preview(full);
   }
+#endif
 }
 
 void fm_on_nav_key(uint32_t key) {
