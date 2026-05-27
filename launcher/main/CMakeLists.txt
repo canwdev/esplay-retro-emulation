@@ -14,5 +14,17 @@ idf_component_register(
         "preview/preview_registry.c"
         "preview/preview_text.c"
         "preview/preview_audio.c"
-    INCLUDE_DIRS "." "preview"
+        "../port/esp32/hal_audio_esp.c"
+        "../port/esp32/hal_display_esp.c"
+        "../port/esp32/hal_input_esp.c"
+        "../port/esp32/hal_power_esp.c"
+        "../port/esp32/hal_settings_esp.c"
+        "../port/esp32/hal_storage_esp.c"
+        "../port/esp32/hal_system_esp.c"
+        "../port/esp32/platform_log_esp.c"
+        "../port/esp32/platform_mem_esp.c"
+        "../port/esp32/platform_time_esp.c"
+    INCLUDE_DIRS "." "preview" "../hal" "../port/esp32"
     REQUIRES esp_timer hal-drivers lvgl nvs_flash)
+
+target_compile_definitions(${COMPONENT_LIB} PUBLIC TARGET_ESP32)

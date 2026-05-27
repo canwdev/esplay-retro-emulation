@@ -27,6 +27,20 @@ ui_state_t g_ui = {0};
 
 static esp_lcd_panel_handle_t panel_handle;
 
+#ifdef __GNUC__
+__attribute__((weak)) void app_init(void) {
+}
+
+__attribute__((weak)) void app_tick(void) {
+}
+#else
+void app_init(void) {
+}
+
+void app_tick(void) {
+}
+#endif
+
 #define LVGL_TICK_PERIOD_MS 5
 
 void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
@@ -109,6 +123,7 @@ static void init_ui(void) { sdcard_open("/sd"); }
 static void run_main_loop(void) {
   TickType_t xLast = xTaskGetTickCount();
   while (1) {
+    app_tick();
     uint32_t time_till_next = lv_timer_handler();
     /* During audio playback throttle the LVGL render loop to ~25 fps so the
      * LCD SPI DMA and esp_timer overhead don't compete with the audio task. */
@@ -128,5 +143,6 @@ void app_main(void) {
   init_system_components();
   init_lvgl_display();
   init_ui();
+  app_init();
   run_main_loop();
 }
