@@ -42,7 +42,6 @@ add_executable(launcher_sim
   ../port/sim/platform_log_sim.c
   ../port/sim/platform_mem_sim.c
   ../port/sim/platform_time_sim.c
-  stubs.c
   ../main/ui_font.c
   ../main/fonts/ui_font_esplayfont.c
   ../main/ui_theme.c
@@ -53,10 +52,13 @@ add_executable(launcher_sim
   ../main/ui_backlight.c
   ../main/input_bridge.c
   ../main/file_manager.c
+  ../main/preview/preview_registry.c
+  ../main/preview/preview_text.c
+  ../main/preview/preview_audio.c
 )
 
 target_compile_definitions(launcher_sim PRIVATE TARGET_SIM)
-target_include_directories(launcher_sim PRIVATE ../main ../main/preview ../hal ../port/sim)
+target_include_directories(launcher_sim PRIVATE ../main ../main/preview ../hal ../port/sim "${lvgl_SOURCE_DIR}/src")
 target_link_libraries(launcher_sim PRIVATE lvgl SDL2::SDL2)
 
 if(WIN32)

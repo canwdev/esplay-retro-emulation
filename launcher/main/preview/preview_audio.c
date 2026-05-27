@@ -1,4 +1,75 @@
 #include "preview_audio.h"
+
+#ifdef TARGET_SIM
+
+#include "file_manager.h"
+#include "ui_backlight.h"
+#include "ui_chrome.h"
+#include "ui_theme.h"
+
+#include "lvgl.h"
+
+static const char *TAG = "preview_audio";
+static ui_chrome_t s_chrome;
+static lv_obj_t *s_body_label;
+static bool s_opened;
+
+static bool preview_audio_can_open(const char *path) {
+  return fm_is_playable_audio_filename(fm_base_name(path));
+}
+
+static bool preview_audio_open(const char *path, preview_open_args_t *args) {
+  lv_obj_clean(args->screen);
+  ui_theme_apply_screen(args->screen);
+  ui_chrome_detach(&s_chrome);
+  s_chrome = ui_chrome_create(args->screen, fm_base_name(path));
+
+  s_body_label = lv_label_create(args->screen);
+  ui_theme_style_label_primary(s_body_label);
+  lv_label_set_long_mode(s_body_label, LV_LABEL_LONG_MODE_WRAP);
+  lv_obj_set_width(s_body_label, 300);
+  lv_label_set_text(s_body_label,
+                    "Audio preview is not supported in the simulator.\n"
+                    "Use real hardware for playback validation.");
+  lv_obj_align(s_body_label, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 10);
+
+  (void)TAG;
+  s_opened = true;
+  return true;
+}
+
+static void preview_audio_close(void) {
+  ui_chrome_detach(&s_chrome);
+  s_body_label = NULL;
+  s_opened = false;
+}
+
+static bool preview_audio_on_key(const input_gamepad_state *gp,
+                                const bool edge[]) {
+  (void)gp;
+  if (!s_opened)
+    return false;
+  if (edge[GAMEPAD_INPUT_MENU]) {
+    ui_backlight_toggle();
+    return true;
+  }
+  return false;
+}
+
+static void preview_audio_on_timer(void) {
+}
+
+const preview_app_t preview_audio_app = {
+    .id       = "audio",
+    .can_open = preview_audio_can_open,
+    .open     = preview_audio_open,
+    .close    = preview_audio_close,
+    .on_key   = preview_audio_on_key,
+    .on_timer = preview_audio_on_timer,
+};
+
+#else
+
 #include "audio.h"
 #include "file_manager.h"
 #include "lcd.h"
@@ -616,3 +687,5 @@ const preview_app_t preview_audio_app = {
     .on_key   = preview_audio_on_key,
     .on_timer = preview_audio_on_timer,
 };
+
+#endif

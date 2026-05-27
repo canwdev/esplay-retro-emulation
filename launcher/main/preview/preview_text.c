@@ -1,17 +1,20 @@
 #include "preview_text.h"
 #include "file_manager.h"
+#include "hal_display.h"
+#include "platform_log.h"
+#include "platform_mem.h"
 #include "ui_chrome.h"
 #include "ui_font.h"
 #include "ui_theme.h"
-#include "settings.h"
-#include "misc/lv_text_private.h"
-#include "lcd.h"
-#include "esp_log.h"
-#include "esp_heap_caps.h"
-#include "esp_system.h"
 #include "ui_backlight.h"
+#include "misc/lv_text_private.h"
+
+#ifdef TARGET_SIM
+#include "sim_compat.h"
+#endif
+
 #include <stdio.h>
-#include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -48,6 +51,26 @@ static lv_coord_t s_page_h;
 
 /* ------------------------------------------------------------------ codec */
 
+static void *pmalloc(size_t n) {
+  return platform_malloc(n);
+}
+
+static void pfree(void *p) {
+  platform_free(p);
+}
+
+static void *prealloc(void *p, size_t old_n, size_t new_n) {
+  void *n = platform_malloc(new_n);
+  if (!n)
+    return NULL;
+  if (p && old_n) {
+    size_t c = (old_n < new_n) ? old_n : new_n;
+    memcpy(n, p, c);
+  }
+  platform_free(p);
+  return n;
+}
+
 static bool is_utf8(const uint8_t *s, size_t len) {
   for (size_t i = 0; i < len; ) {
     if (s[i] < 0x80) { i++; continue; }
@@ -73,7 +96,8 @@ static char *decode_text(uint8_t *raw, size_t len, size_t *out_len) {
   }
 
   if (is_utf8(raw, len)) {
-    ESP_LOGI(TAG, "Decoding as UTF-8 (in-place), len: %zu", len);
+    platform_log(PLATFORM_LOG_INFO, TAG, "Decoding as UTF-8 (in-place), len: %zu",
+                 len);
     for (size_t i = 0; i < len; i++) if (raw[i] == '\r') raw[i] = '\n';
     raw[len] = '\0';
     *out_len = len;
@@ -81,7 +105,7 @@ static char *decode_text(uint8_t *raw, size_t len, size_t *out_len) {
   }
 
   /* GB2312 fallback */
-  ESP_LOGI(TAG, "Decoding as GB2312, len: %zu", len);
+  platform_log(PLATFORM_LOG_INFO, TAG, "Decoding as GB2312, len: %zu", len);
   
   /* 1. Calculate exact required size to save RAM. 
    * GB2312 (2 bytes) -> UTF-8 (3 bytes) is 1.5x max. 
@@ -92,9 +116,10 @@ static char *decode_text(uint8_t *raw, size_t len, size_t *out_len) {
     else { required += 3; i += 2; }
   }
 
-  char *out = malloc(required + 1);
+  char *out = pmalloc(required + 1);
   if (!out) { 
-    ESP_LOGE(TAG, "Failed to malloc for GB2312 decode (needed %zu)", required); 
+    platform_log(PLATFORM_LOG_ERROR, TAG,
+                 "Failed to malloc for GB2312 decode (needed %zu)", required);
     return NULL; 
   }
 
@@ -108,15 +133,15 @@ static char *decode_text(uint8_t *raw, size_t len, size_t *out_len) {
     } else { out[o++] = '?'; i++; }
   }
   out[o] = '\0'; *out_len = o;
-  ESP_LOGI(TAG, "GB2312 decoded, new len: %zu", o);
+  platform_log(PLATFORM_LOG_INFO, TAG, "GB2312 decoded, new len: %zu", o);
   return out;
 }
 
 /* ------------------------------------------------------------------ doc */
 
 static void text_doc_free(text_doc_t *doc) {
-  free(doc->utf8);
-  free(doc->page_off);
+  pfree(doc->utf8);
+  pfree(doc->page_off);
   memset(doc, 0, sizeof(*doc));
 }
 
@@ -125,7 +150,9 @@ static int text_build_pages(text_doc_t *doc, lv_coord_t max_w, lv_coord_t max_h)
   lv_coord_t line_h = lv_font_get_line_height(font) + TEXT_LINE_SPACE;
   int max_lines = max_h / (line_h > 0 ? line_h : 14);
   if (max_lines < 1) max_lines = 1;
-  ESP_LOGI(TAG, "Building pages: w=%d, h=%d, max_lines=%d", max_w, max_h, max_lines);
+  platform_log(PLATFORM_LOG_INFO, TAG,
+               "Building pages: w=%d, h=%d, max_lines=%d", max_w, max_h,
+               max_lines);
 
   lv_text_attributes_t attr;
   lv_text_attributes_init(&attr);
@@ -133,15 +160,25 @@ static int text_build_pages(text_doc_t *doc, lv_coord_t max_w, lv_coord_t max_h)
   attr.line_space = TEXT_LINE_SPACE;
 
   int cap = 64, pages = 0;
-  uint32_t *off = malloc(cap * sizeof(uint32_t));
-  if (!off) { ESP_LOGE(TAG, "Failed to malloc for page offsets"); return -1; }
+  uint32_t *off = pmalloc(cap * sizeof(uint32_t));
+  if (!off) {
+    platform_log(PLATFORM_LOG_ERROR, TAG,
+                 "Failed to malloc for page offsets");
+    return -1;
+  }
 
   size_t pos = 0;
   while (pos <= doc->utf8_len) {
     if (pages >= cap) {
+      size_t old_n = (size_t)cap * sizeof(uint32_t);
       cap *= 2;
-      uint32_t *n = realloc(off, cap * sizeof(uint32_t));
-      if (!n) { ESP_LOGE(TAG, "Failed to realloc for page offsets"); free(off); return -1; }
+      uint32_t *n = prealloc(off, old_n, (size_t)cap * sizeof(uint32_t));
+      if (!n) {
+        platform_log(PLATFORM_LOG_ERROR, TAG,
+                     "Failed to realloc for page offsets");
+        pfree(off);
+        return -1;
+      }
       off = n;
     }
     off[pages++] = (uint32_t)pos;
@@ -153,7 +190,7 @@ static int text_build_pages(text_doc_t *doc, lv_coord_t max_w, lv_coord_t max_h)
     }
   }
   doc->page_off = off; doc->page_count = pages; doc->cur_page = 0;
-  ESP_LOGI(TAG, "Total pages: %d", pages);
+  platform_log(PLATFORM_LOG_INFO, TAG, "Total pages: %d", pages);
   return 0;
 }
 
@@ -184,19 +221,44 @@ static bool preview_text_can_open(const char *path) {
     const char *dot = strrchr(path, '.');
     if (dot && strcasecmp(dot, exts[i]) == 0) return true;
   }
+#ifdef TARGET_SIM
+  bool is_dir = false;
+  bool is_reg = false;
+  unsigned long size = 0;
+  unsigned long winerr = 0;
+  if (!sim_path_get_info_utf8(path, &is_dir, &is_reg, &size, &winerr))
+    return false;
+  return is_reg && size > 0 && size <= TEXT_RAW_MAX;
+#else
   struct stat st;
-  return (stat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 && st.st_size <= TEXT_RAW_MAX);
+  return (stat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 &&
+          st.st_size <= TEXT_RAW_MAX);
+#endif
 }
 
 static bool preview_text_load(const char *path, text_doc_t *doc, lv_coord_t w, lv_coord_t h) {
-  struct stat st;
-  if (stat(path, &st) != 0 || st.st_size == 0) {
-    ESP_LOGE(TAG, "stat failed or file empty: %s", path);
+#ifdef TARGET_SIM
+  bool is_dir = false;
+  bool is_reg = false;
+  unsigned long size = 0;
+  unsigned long winerr = 0;
+  if (!sim_path_get_info_utf8(path, &is_dir, &is_reg, &size, &winerr) || !is_reg ||
+      size == 0) {
+    platform_log(PLATFORM_LOG_ERROR, TAG,
+                 "stat failed or file empty: %s (winerr=%lu)", path, winerr);
     return false;
   }
-
+  size_t full_sz = (size_t)size;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0 || st.st_size == 0) {
+    platform_log(PLATFORM_LOG_ERROR, TAG, "stat failed or file empty: %s", path);
+    return false;
+  }
   size_t full_sz = (size_t)st.st_size;
-  uint32_t free_heap = (uint32_t)esp_get_free_heap_size();
+#endif
+
+  uint32_t free_heap = (uint32_t)platform_free_heap();
   
   /* 
    * Strategy:
@@ -204,8 +266,20 @@ static bool preview_text_load(const char *path, text_doc_t *doc, lv_coord_t w, l
    * 2. GB2312 needs sz (raw) + sz * 1.5 (decoded) = 2.5 * sz bytes.
    * We don't know the encoding yet, so we read a small header first.
    */
+#ifdef TARGET_SIM
+  FILE *f = sim_fopen_utf8(path, "rb", &winerr);
+  if (!f) {
+    platform_log(PLATFORM_LOG_ERROR, TAG, "fopen failed: %s (winerr=%lu)", path,
+                 winerr);
+    return false;
+  }
+#else
   FILE *f = fopen(path, "rb");
-  if (!f) { ESP_LOGE(TAG, "fopen failed: %s", path); return false; }
+  if (!f) {
+    platform_log(PLATFORM_LOG_ERROR, TAG, "fopen failed: %s", path);
+    return false;
+  }
+#endif
 
   uint8_t header[1024];
   size_t header_len = fread(header, 1, sizeof(header), f);
@@ -217,14 +291,16 @@ static bool preview_text_load(const char *path, text_doc_t *doc, lv_coord_t w, l
 
   size_t sz = (full_sz > sz_limit) ? sz_limit : full_sz;
   
-  ESP_LOGI(TAG, "Loading file: %s, size: %zu, maybe_utf8: %d, heap free: %u, target sz: %zu", 
-           path, full_sz, maybe_utf8, free_heap, sz);
+  platform_log(PLATFORM_LOG_INFO, TAG,
+               "Loading file: %s, size: %zu, maybe_utf8: %d, heap free: %u, "
+               "target sz: %zu",
+               path, full_sz, maybe_utf8, free_heap, sz);
 
 retry_load:
   uint8_t *raw = NULL;
   size_t attempt_sz = sz;
   while (attempt_sz > 0) {
-    raw = malloc(attempt_sz + 1);
+    raw = pmalloc(attempt_sz + 1);
     if (raw) {
       sz = attempt_sz;
       break;
@@ -234,13 +310,16 @@ retry_load:
   }
 
   if (!raw) {
-    ESP_LOGE(TAG, "Failed to malloc raw buffer, heap free: %u", (unsigned)esp_get_free_heap_size());
+    platform_log(PLATFORM_LOG_ERROR, TAG,
+                 "Failed to malloc raw buffer, heap free: %u",
+                 (unsigned)platform_free_heap());
     fclose(f);
     return false;
   }
 
   if (sz < full_sz) {
-    ESP_LOGW(TAG, "File too large for heap, loading only first %zu bytes", sz);
+    platform_log(PLATFORM_LOG_WARN, TAG,
+                 "File too large for heap, loading only first %zu bytes", sz);
   }
 
   fseek(f, 0, SEEK_SET);
@@ -251,24 +330,31 @@ retry_load:
   char *decoded = decode_text(raw, n, &doc->utf8_len);
   if (!decoded) {
     /* If decode_text failed due to OOM, retry with a smaller chunk. */
-    free(raw);
+    pfree(raw);
     if (sz > 4096) {
       sz /= 2;
-      ESP_LOGW(TAG, "Decode failed (likely OOM), retrying with sz=%zu", sz);
+#ifdef TARGET_SIM
+      platform_log(PLATFORM_LOG_WARN, TAG,
+                   "Decode failed (likely OOM), retrying with sz=%zu", sz);
+      f = sim_fopen_utf8(path, "rb", &winerr);
+#else
+      platform_log(PLATFORM_LOG_WARN, TAG,
+                   "Decode failed (likely OOM), retrying with sz=%zu", sz);
       f = fopen(path, "rb");
+#endif
       if (f) goto retry_load;
     }
-    ESP_LOGE(TAG, "decode_text failed");
+    platform_log(PLATFORM_LOG_ERROR, TAG, "decode_text failed");
     return false;
   }
 
   doc->utf8 = decoded;
   if (decoded != (char *)raw) {
-    free(raw);
+    pfree(raw);
   }
   
   if (text_build_pages(doc, w, h) != 0) {
-    ESP_LOGE(TAG, "text_build_pages failed");
+    platform_log(PLATFORM_LOG_ERROR, TAG, "text_build_pages failed");
     text_doc_free(doc);
     return false;
   }
@@ -300,12 +386,13 @@ static void preview_text_page_hold_tick(const input_gamepad_state *gp) {
 }
 
 static bool preview_text_open(const char *path, preview_open_args_t *args) {
-  ESP_LOGI(TAG, "Opening text preview: %s", path);
+  platform_log(PLATFORM_LOG_INFO, TAG, "Opening text preview: %s", path);
   lv_coord_t top = ui_chrome_body_top() + 2;
-  s_page_w = 290; s_page_h = LCD_HEIGHT - top - 22;
+  s_page_w = 290;
+  s_page_h = HAL_DISPLAY_HEIGHT - top - 22;
   text_doc_t pending;
   if (!preview_text_load(path, &pending, s_page_w, s_page_h)) {
-    ESP_LOGE(TAG, "Failed to load text document");
+    platform_log(PLATFORM_LOG_ERROR, TAG, "Failed to load text document");
     return false;
   }
   text_doc_free(&s_doc); s_doc = pending;

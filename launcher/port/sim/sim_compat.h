@@ -1,6 +1,8 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifdef _MSC_VER
@@ -107,6 +109,31 @@ static inline bool sim_delete_utf8(const char *path,
   (void)path;
   (void)out_winerr;
   return false;
+#endif
+}
+
+static inline FILE *sim_fopen_utf8(const char *path, const char *mode,
+                                   unsigned long *out_winerr) {
+#ifdef _WIN32
+  if (out_winerr)
+    *out_winerr = 0;
+  wchar_t wpath[1024];
+  wchar_t wmode[32];
+  if (sim_utf8_to_wide(path, wpath, (int)(sizeof(wpath) / sizeof(wpath[0]))) <=
+          0 ||
+      sim_utf8_to_wide(mode, wmode, (int)(sizeof(wmode) / sizeof(wmode[0]))) <=
+          0) {
+    if (out_winerr)
+      *out_winerr = (unsigned long)GetLastError();
+    return NULL;
+  }
+  FILE *f = _wfopen(wpath, wmode);
+  if (!f && out_winerr)
+    *out_winerr = (unsigned long)GetLastError();
+  return f;
+#else
+  (void)out_winerr;
+  return fopen(path, mode);
 #endif
 }
 
