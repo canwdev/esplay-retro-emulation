@@ -1,3 +1,7 @@
+# Fixed 16MB flash; auto-detect sets --flash_size detect in flash_args, which breaks idf.py qemu merge_bin.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=n
+
 # ESPlay Micro (pebri86/esplay_micro_hardware): BCK=IO26, WS(LCK)=IO25, DIN=IO19.
 # DOUT must match I2S DIN on the DAC (GPIO 4 is wrong for stock ESPlay Micro → no audio).
 CONFIG_AUDIO_I2S_BCLK_GPIO=26
@@ -16,3 +20,6 @@ CONFIG_FATFS_LFN_HEAP=y
 # LVGL: use libc heap so large directory lists don't exhaust a fixed pool.
 # CONFIG_LV_USE_BUILTIN_MALLOC is not set
 CONFIG_LV_USE_CLIB_MALLOC=y
+# Launcher does not use LVGL examples/demos; keep them out to avoid huge Windows ar archives.
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_LV_BUILD_DEMOS=n
