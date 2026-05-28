@@ -3,6 +3,7 @@
 #include "hal_display.h"
 #include "platform_log.h"
 #include "platform_mem.h"
+#include "platform_time.h"
 #include "ui_chrome.h"
 #include "ui_font.h"
 #include "ui_theme.h"
@@ -477,7 +478,13 @@ static bool text_next_page_offset(const text_doc_t *doc, size_t start,
     uint32_t adv =
         lv_text_get_next_line(&chunk.text[pos], chunk.len - pos, font, NULL,
                               &attr);
-    pos += adv > 0 ? adv : 1;
+    if (adv > 0) {
+      pos += adv;
+    } else {
+      uint32_t i = 0;
+      lv_text_encoded_next(&chunk.text[pos], &i);
+      pos += (i > 0) ? (size_t)i : 1;
+    }
   }
 
   uint16_t raw_adv = 0;
@@ -503,6 +510,9 @@ static bool text_build_page_index(text_doc_t *doc, lv_coord_t max_w,
   if (!text_doc_push_offset(doc, off))
     return false;
 
+  uint32_t last_yield_ms = platform_millis();
+  int last_logged_pages = 0;
+
   while (off < doc->file_size) {
     size_t next = off;
     if (!text_next_page_offset(doc, off, max_w, max_h, &next))
@@ -512,6 +522,18 @@ static bool text_build_page_index(text_doc_t *doc, lv_coord_t max_w,
     if (!text_doc_push_offset(doc, next))
       return false;
     off = next;
+
+    if (doc->page_count - last_logged_pages >= 200) {
+      last_logged_pages = doc->page_count;
+      platform_log(PLATFORM_LOG_INFO, TAG, "indexing pages=%d off=%zu/%zu",
+                   doc->page_count, off, doc->file_size);
+    }
+
+    uint32_t now = platform_millis();
+    if ((uint32_t)(now - last_yield_ms) >= 50) {
+      platform_sleep_ms(1);
+      last_yield_ms = now;
+    }
   }
 
   doc->page_count -= 1; /* Last offset is sentinel. */
