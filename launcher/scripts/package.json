@@ -1,5 +1,6 @@
 {
 	"dependencies": {
+		"fonteditor-core": "^2.6.3",
 		"opentype.js": "^2.0.0",
 		"lv_font_conv": "^1.5.3"
 	}

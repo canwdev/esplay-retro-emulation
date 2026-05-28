@@ -23,3 +23,4 @@ CONFIG_LV_USE_CLIB_MALLOC=y
 # Launcher does not use LVGL examples/demos; keep them out to avoid huge Windows ar archives.
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
+CONFIG_LV_FONT_MONTSERRAT_28=y

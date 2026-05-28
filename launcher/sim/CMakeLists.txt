@@ -61,6 +61,11 @@ target_compile_definitions(launcher_sim PRIVATE TARGET_SIM)
 target_include_directories(launcher_sim PRIVATE ../main ../main/preview ../hal ../port/sim "${lvgl_SOURCE_DIR}/src")
 target_link_libraries(launcher_sim PRIVATE lvgl SDL2::SDL2)
 
+# ui_font_esplayfont.c contains UTF-8 glyph comments (CJK); avoid MSVC C4819 on CP936.
+if(MSVC)
+  target_compile_options(launcher_sim PRIVATE /utf-8)
+endif()
+
 if(WIN32)
   add_custom_command(TARGET launcher_sim POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

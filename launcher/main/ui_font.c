@@ -2,10 +2,13 @@
 
 LV_FONT_DECLARE(ui_font_esplayfont);
 LV_FONT_DECLARE(lv_font_montserrat_14);
+LV_FONT_DECLARE(lv_font_montserrat_28);
 
 const lv_font_t *ui_font_default(void) { return &ui_font_esplayfont; }
 
 const lv_font_t *ui_font_builtin(void) { return &lv_font_montserrat_14; }
+
+const lv_font_t *ui_font_icon(void) { return &lv_font_montserrat_28; }
 
 void ui_font_apply_display(lv_display_t *disp) {
 #if LV_USE_THEME_DEFAULT

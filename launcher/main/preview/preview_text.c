@@ -26,6 +26,7 @@ static const char *TAG = "preview_text";
 #define TEXT_DETECT_SAMPLE     4096
 #define TEXT_DECODE_WINDOW     16384
 #define TEXT_LINE_SPACE        4
+#define TEXT_LETTER_SPACE      1
 #define TEXT_PAGE_HOLD_MS_INITIAL 400
 #define TEXT_PAGE_HOLD_MS_REPEAT  80
 #define TEXT_PAGE_HOLD_FAST_MS    1200
@@ -469,6 +470,7 @@ static bool text_next_page_offset(const text_doc_t *doc, size_t start,
   lv_text_attributes_t attr;
   lv_text_attributes_init(&attr);
   attr.max_width = max_w;
+  attr.letter_space = TEXT_LETTER_SPACE;
   attr.line_space = TEXT_LINE_SPACE;
 
   size_t pos = 0;
@@ -694,6 +696,7 @@ static bool preview_text_open(const char *path, preview_open_args_t *args) {
   s_body_label = lv_label_create(args->screen);
   lv_obj_set_width(s_body_label, s_page_w);
   lv_label_set_long_mode(s_body_label, LV_LABEL_LONG_MODE_WRAP);
+  lv_obj_set_style_text_letter_space(s_body_label, TEXT_LETTER_SPACE, 0);
   lv_obj_set_style_text_line_space(s_body_label, TEXT_LINE_SPACE, 0);
   ui_theme_style_label_primary(s_body_label);
   lv_obj_align(s_body_label, LV_ALIGN_TOP_MID, 0, top);

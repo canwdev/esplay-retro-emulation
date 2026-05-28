@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 const lv_font_conv = require('lv_font_conv/lib/cli');
 
 // ==================== 配置区域 ====================
-const FONT_NAME = 'Cubic_11';        // 字体文件名（不含后缀）
+const FONT_NAME = 'EsplayMerged-12px';        // 字体文件名（不含后缀）
 const LV_FONT_NAME = 'ui_font_esplayfont';   // LVGL 内部的字体变量名
 const FONT_SIZE = '12';                      // 字体渲染大小 (从 12 改为 16)
 // =================================================

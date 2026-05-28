@@ -4,6 +4,7 @@
 #include "platform_log.h"
 #include "ui_app.h"
 #include "ui_chrome.h"
+#include "ui_font.h"
 #include "ui_settings.h"
 #include "ui_theme.h"
 #include "lvgl.h"
@@ -19,13 +20,17 @@ typedef enum {
 static ui_chrome_t s_chrome;
 static home_tile_t s_last_home_tile = HOME_TILE_FILES;
 
+static const char *home_tile_title(home_tile_t tile) {
+  return tile == HOME_TILE_SETTINGS ? "Settings" : "File Manager";
+}
+
 static void home_update_selected_label(lv_obj_t *obj) {
   if (!g_ui.menu_selected_label)
     return;
   if (obj == g_ui.home_btn_files)
-    lv_label_set_text(g_ui.menu_selected_label, "File Manager");
+    lv_label_set_text(g_ui.menu_selected_label, home_tile_title(HOME_TILE_FILES));
   else if (obj == g_ui.home_btn_settings)
-    lv_label_set_text(g_ui.menu_selected_label, "Settings");
+    lv_label_set_text(g_ui.menu_selected_label, home_tile_title(HOME_TILE_SETTINGS));
 }
 
 static void btn_event_handler(lv_event_t *e) {
@@ -61,33 +66,20 @@ static void btn_event_handler(lv_event_t *e) {
   }
 }
 
-static lv_obj_t *create_home_tile(lv_obj_t *parent, const char *symbol,
-                                  const char *caption) {
+static lv_obj_t *create_home_tile(lv_obj_t *parent, const char *symbol) {
   lv_obj_t *btn = lv_btn_create(parent);
   if (!btn)
     return NULL;
 
   ui_theme_style_list_btn(btn);
-  lv_obj_set_size(btn, 96, 72);
+  lv_obj_set_size(btn, 112, 96);
   lv_obj_add_event_cb(btn, btn_event_handler, LV_EVENT_ALL, NULL);
 
-  lv_obj_t *col = lv_obj_create(btn);
-  lv_obj_remove_style_all(col);
-  lv_obj_set_size(col, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_all(col, 0, 0);
-  lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(col, 0, 0);
-
-  lv_obj_t *sym = lv_label_create(col);
+  lv_obj_t *sym = lv_label_create(btn);
   lv_label_set_text(sym, symbol);
+  lv_obj_set_style_text_font(sym, ui_font_icon(), 0);
   ui_theme_style_label_accent(sym);
-
-  lv_obj_t *lbl = lv_label_create(col);
-  lv_label_set_text(lbl, caption);
-  ui_theme_style_label_primary(lbl);
+  lv_obj_center(sym);
 
   return btn;
 }
@@ -120,7 +112,8 @@ void ui_home_create(void) {
   lv_obj_set_style_pad_row(center, 12, 0);
 
   g_ui.menu_selected_label = lv_label_create(center);
-  lv_label_set_text(g_ui.menu_selected_label, "File Manager");
+  lv_label_set_text(g_ui.menu_selected_label,
+                    home_tile_title(s_last_home_tile));
   ui_theme_style_label_accent(g_ui.menu_selected_label);
 
   lv_obj_t *row = lv_obj_create(center);
@@ -133,10 +126,8 @@ void ui_home_create(void) {
   lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(row, 0, 0);
 
-  g_ui.home_btn_files =
-      create_home_tile(row, LV_SYMBOL_SD_CARD, "File Manager");
-  g_ui.home_btn_settings =
-      create_home_tile(row, LV_SYMBOL_SETTINGS, "Settings");
+  g_ui.home_btn_files = create_home_tile(row, LV_SYMBOL_SD_CARD);
+  g_ui.home_btn_settings = create_home_tile(row, LV_SYMBOL_SETTINGS);
 
   if (g_ui.home_btn_files)
     lv_group_add_obj(g_ui.input_group, g_ui.home_btn_files);

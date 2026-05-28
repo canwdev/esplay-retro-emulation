@@ -22,6 +22,18 @@ static bool input_edge(const input_gamepad_state *cur, int idx) {
          (!s_last_valid || s_last.values[idx] == 0);
 }
 
+/** Swallow wake-up key only in file manager (incl. preview). */
+static bool input_backlight_swallow_wake(void) {
+  if (preview_is_active())
+    return true;
+  return g_ui.current_page == PAGE_FILES;
+}
+
+static bool input_lvgl_allowed_while_backlight_off(void) {
+  return g_ui.current_page == PAGE_HOME ||
+         g_ui.current_page == PAGE_SETTINGS;
+}
+
 static void input_poll_timer_cb(lv_timer_t *t) {
   (void)t;
   input_gamepad_state gp;
@@ -47,10 +59,12 @@ static void input_poll_timer_cb(lv_timer_t *t) {
 
   if (any_edge && !ui_backlight_is_on()) {
     ui_backlight_set_on(true);
-    /* Swallow the wake-up key press. */
-    s_last = gp;
-    s_last_valid = true;
-    return;
+    if (input_backlight_swallow_wake()) {
+      /* File manager: swallow the wake-up key press. */
+      s_last = gp;
+      s_last_valid = true;
+      return;
+    }
   }
 
   if (any_pressed) {
@@ -118,7 +132,7 @@ void input_bridge_init(void) {
 
 void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {
   (void)indev;
-  if (!ui_backlight_is_on()) {
+  if (!ui_backlight_is_on() && !input_lvgl_allowed_while_backlight_off()) {
     data->state = LV_INDEV_STATE_RELEASED;
     return;
   }
@@ -126,6 +140,18 @@ void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {
   input_gamepad_state gamepad_state;
   hal_input_poll();
   hal_input_read(&gamepad_state);
+
+  if (!ui_backlight_is_on()) {
+    bool any_pressed = false;
+    for (int i = 0; i < GAMEPAD_INPUT_MAX; i++) {
+      if (gamepad_state.values[i] == 1) {
+        any_pressed = true;
+        break;
+      }
+    }
+    if (any_pressed)
+      ui_backlight_set_on(true);
+  }
 
   data->state = LV_INDEV_STATE_RELEASED;
 
