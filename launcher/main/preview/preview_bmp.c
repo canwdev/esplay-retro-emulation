@@ -5,8 +5,6 @@
 #include "platform_mem.h"
 #include "platform_log.h"
 #include "ui_backlight.h"
-#include "ui_chrome.h"
-#include "ui_theme.h"
 
 #ifdef TARGET_SIM
 #include "sim_compat.h"
@@ -58,10 +56,7 @@ typedef struct {
 } bmp_state_t;
 
 static bmp_state_t s_state;
-static ui_chrome_t s_chrome;
-static lv_obj_t *s_viewport;
 static lv_obj_t *s_canvas;
-static lv_obj_t *s_status_label;
 static bool s_active;
 
 static uint32_t bmp_zoom_next(uint32_t scale, bool zoom_in);
@@ -370,15 +365,6 @@ static void bmp_clamp_pan(int32_t draw_w, int32_t draw_h) {
     s_state.pan_y = -max_pan_y;
 }
 
-static void bmp_update_status(void) {
-  if (!s_status_label)
-    return;
-  lv_label_set_text_fmt(s_status_label, "%dx%d  %ubpp  %u%%",
-                        (int)s_state.meta.width, (int)s_state.meta.height,
-                        (unsigned)s_state.meta.bpp,
-                        (unsigned)(s_state.scale * 100U / LV_SCALE_NONE));
-}
-
 static bool bmp_ensure_canvas(uint32_t scale) {
   lv_coord_t draw_w;
   lv_coord_t draw_h;
@@ -476,7 +462,6 @@ static bool bmp_render_canvas(void) {
     }
   }
 
-  bmp_update_status();
   lv_draw_buf_flush_cache(s_state.canvas_draw_buf, NULL);
   lv_obj_invalidate(s_canvas);
   return true;
@@ -506,7 +491,6 @@ static bool bmp_apply_transform(void) {
   }
   lv_obj_set_pos(s_canvas, (s_state.viewport_w - draw_w) / 2 + s_state.pan_x,
                  (s_state.viewport_h - draw_h) / 2 + s_state.pan_y);
-  bmp_update_status();
   return true;
 }
 
@@ -626,9 +610,6 @@ static bool bmp_apply_path(const char *path, bool preserve_mode) {
   if (!bmp_open_document(path))
     return false;
 
-  if (s_chrome.title_label)
-    lv_label_set_text(s_chrome.title_label, fm_base_name(path));
-
   if (preserve_mode && !was_fit) {
     if (!bmp_reset_view(false)) {
       platform_log(PLATFORM_LOG_WARN, TAG, "1:1 rejected by memory");
@@ -678,10 +659,8 @@ static bool bmp_switch_relative(int delta) {
 }
 
 static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
-  lv_coord_t top = ui_chrome_body_top() + 2;
-  lv_coord_t bottom_reserved = 20;
-  lv_coord_t viewport_w = HAL_DISPLAY_WIDTH - 12;
-  lv_coord_t viewport_h = HAL_DISPLAY_HEIGHT - top - bottom_reserved;
+  lv_coord_t viewport_w = HAL_DISPLAY_WIDTH;
+  lv_coord_t viewport_h = HAL_DISPLAY_HEIGHT;
 
   memset(&s_state, 0, sizeof(s_state));
   s_state.viewport_w = viewport_w;
@@ -696,25 +675,11 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
     args->shared_names = NULL;
   }
 
-  ui_chrome_detach(&s_chrome);
   lv_obj_clean(args->screen);
-  ui_theme_apply_screen(args->screen);
-  s_chrome = ui_chrome_create(args->screen, fm_base_name(path));
-
-  s_viewport = lv_obj_create(args->screen);
-  lv_obj_remove_flag(s_viewport, LV_OBJ_FLAG_SCROLLABLE);
-  ui_theme_style_panel(s_viewport);
-  lv_obj_set_size(s_viewport, viewport_w, viewport_h);
-  lv_obj_align(s_viewport, LV_ALIGN_TOP_MID, 0, top);
-  lv_obj_set_style_pad_all(s_viewport, 0, 0);
-  lv_obj_set_style_radius(s_viewport, 0, 0);
-
-  s_canvas = lv_canvas_create(s_viewport);
+  lv_obj_set_style_pad_all(args->screen, 0, 0);
+  lv_obj_set_style_border_width(args->screen, 0, 0);
+  s_canvas = lv_canvas_create(args->screen);
   lv_obj_remove_flag(s_canvas, LV_OBJ_FLAG_SCROLLABLE);
-
-  s_status_label = lv_label_create(args->screen);
-  ui_theme_style_label_secondary(s_status_label);
-  lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_LEFT, 8, -2);
 
   s_active = true;
   if (!bmp_apply_path(path, false)) {
@@ -728,10 +693,7 @@ static void preview_bmp_close(void) {
   bmp_release_canvas();
   bmp_release_doc();
   bmp_release_shared_list();
-  ui_chrome_detach(&s_chrome);
-  s_viewport = NULL;
   s_canvas = NULL;
-  s_status_label = NULL;
   memset(&s_state, 0, sizeof(s_state));
   s_active = false;
 }
