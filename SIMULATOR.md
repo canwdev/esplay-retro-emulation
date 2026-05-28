@@ -9,13 +9,13 @@
 
 ## 1. 目标
 
-| 目标 | 说明 |
-|------|------|
-| PC 验证 GUI | Home / Settings / 文件列表 / Screen Test / 主题，320×240 SDL 窗口 |
-| PC 验证文件列表 | 本地 `testdata/sd/` 映射为存储根路径，POSIX `dirent` |
-| 缩短迭代 | UI 改动以 Simulator 为主，真机做最终验收 |
-| 保持 ESP 构建 | 每个 Phase 结束后 `idf.py build` 仍可通过 |
-| 可选内存压测 | 可控堆池 / 假 `free_heap`，覆盖文本截断、`malloc` 失败路径 |
+| 目标            | 说明                                                              |
+| --------------- | ----------------------------------------------------------------- |
+| PC 验证 GUI     | Home / Settings / 文件列表 / Screen Test / 主题，320×240 SDL 窗口 |
+| PC 验证文件列表 | 本地 `test_sd/` 映射为存储根路径，POSIX `dirent`                  |
+| 缩短迭代        | UI 改动以 Simulator 为主，真机做最终验收                          |
+| 保持 ESP 构建   | 每个 Phase 结束后 `idf.py build` 仍可通过                         |
+| 可选内存压测    | 可控堆池 / 假 `free_heap`，覆盖文本截断、`malloc` 失败路径        |
 
 **不替代真机**：ILI9341 观感、I2S 音质、FreeRTOS 任务栈、GPIO/I2C 手柄、`.dram0.bss` 链接限制、heap 碎片化。
 
@@ -52,10 +52,10 @@ flowchart TB
 
 ### 双入口
 
-| 入口 | 文件（规划） | 职责 |
-|------|--------------|------|
-| ESP32 | `launcher/main/launcher_main.c` | `app_main`、ILI9341 flush、`esp_timer` tick、FreeRTOS 主循环 |
-| PC Sim | `launcher/sim/main.c` | `main()`、SDL flush、SDL 事件 → gamepad、桌面主循环 |
+| 入口   | 文件（规划）                    | 职责                                                         |
+| ------ | ------------------------------- | ------------------------------------------------------------ |
+| ESP32  | `launcher/main/launcher_main.c` | `app_main`、ILI9341 flush、`esp_timer` tick、FreeRTOS 主循环 |
+| PC Sim | `launcher/sim/main.c`           | `main()`、SDL flush、SDL 事件 → gamepad、桌面主循环          |
 
 应用逻辑通过 `app_init()` / `app_tick()`（规划）与平台入口解耦。
 
@@ -98,7 +98,7 @@ launcher/
   sim/
     CMakeLists.txt
     lv_conf.h
-    testdata/sd/           # 模拟 SD 卡内容
+    test_sd/           # 模拟 SD 卡内容
 ```
 
 现有 `esplay-sdk/hal-drivers/` **保留**，作为 `port/esp32` 后端，不重写 ILI9341 / gamepad 驱动。
@@ -114,30 +114,30 @@ launcher/
 
 ### 4.1 较易迁入 `app/`（改 include 即可）
 
-| 文件 | 备注 |
-|------|------|
-| `ui_theme.c` / `ui_font.c` | 仅 LVGL |
-| `ui_screen_test.c` | 纯 LVGL 色条，Sim 价值高 |
-| `ui_home.c` | 去掉对 `lcd.h` 的直接依赖 |
-| `ui_chrome.c` | `battery_level_read` → `hal_power_read_battery()` |
-| `input_bridge.c` | `gamepad_read` → `hal_input_read()` |
+| 文件                       | 备注                                              |
+| -------------------------- | ------------------------------------------------- |
+| `ui_theme.c` / `ui_font.c` | 仅 LVGL                                           |
+| `ui_screen_test.c`         | 纯 LVGL 色条，Sim 价值高                          |
+| `ui_home.c`                | 去掉对 `lcd.h` 的直接依赖                         |
+| `ui_chrome.c`              | `battery_level_read` → `hal_power_read_battery()` |
+| `input_bridge.c`           | `gamepad_read` → `hal_input_read()`               |
 
 ### 4.2 需 HAL 化后再迁
 
-| 文件 | 当前耦合 | 应对 |
-|------|----------|------|
-| `file_manager.c` | 硬编码 `/sd`、`esp_heap_caps`、`audio_stop_playback` | `hal_storage_root()`、`platform_*`、`hal_audio_stop()` |
-| `ui_settings.c` | `lcd_*`、`audio_*`、`sdcard_*`、`power_*`、`esp_restart` | 全部走 HAL |
-| `ui_backlight.c` | `lcd_set_brightness` | `hal_display_set_brightness()` |
-| `preview_text.c` | `esp_get_free_heap_size`、`malloc` | `platform_free_heap()` / `platform_malloc()` |
-| `preview_audio.c` | `audio_*`、`vTaskDelay`、`opendir` | Sim Phase 1 **不链接**；或 stub 仅更新 UI |
+| 文件              | 当前耦合                                                 | 应对                                                   |
+| ----------------- | -------------------------------------------------------- | ------------------------------------------------------ |
+| `file_manager.c`  | 硬编码 `/sd`、`esp_heap_caps`、`audio_stop_playback`     | `hal_storage_root()`、`platform_*`、`hal_audio_stop()` |
+| `ui_settings.c`   | `lcd_*`、`audio_*`、`sdcard_*`、`power_*`、`esp_restart` | 全部走 HAL                                             |
+| `ui_backlight.c`  | `lcd_set_brightness`                                     | `hal_display_set_brightness()`                         |
+| `preview_text.c`  | `esp_get_free_heap_size`、`malloc`                       | `platform_free_heap()` / `platform_malloc()`           |
+| `preview_audio.c` | `audio_*`、`vTaskDelay`、`opendir`                       | Sim Phase 1 **不链接**；或 stub 仅更新 UI              |
 
 ### 4.3 留在 ESP 专用
 
-| 文件 | 原因 |
-|------|------|
-| `launcher_main.c` | `app_main`、`esp_lcd`、`esp_timer`、NVS |
-| `esplay-sdk/hal-drivers/*` | 真机驱动实现 |
+| 文件                       | 原因                                    |
+| -------------------------- | --------------------------------------- |
+| `launcher_main.c`          | `app_main`、`esp_lcd`、`esp_timer`、NVS |
+| `esplay-sdk/hal-drivers/*` | 真机驱动实现                            |
 
 ### 4.4 依赖断开优先级
 
@@ -184,19 +184,19 @@ void hal_input_poll(void);  /* Sim：SDL 事件；ESP：可选空操作 */
 
 **Sim 键盘映射（建议）**：
 
-| 键 | 手柄 |
-|----|------|
-| ↑ ↓ ← → | D-pad |
-| Z / Enter | A |
-| X / Backspace | B |
-| M | Menu |
-| S | Start |
-| Esc | Select |
+| 键            | 手柄   |
+| ------------- | ------ |
+| ↑ ↓ ← →       | D-pad  |
+| Z / Enter     | A      |
+| X / Backspace | B      |
+| M             | Menu   |
+| S             | Start  |
+| Esc           | Select |
 
 ### 5.3 `hal_storage.h`
 
 ```c
-const char *hal_storage_root(void);   /* ESP: "/sd"；Sim: 绝对路径 .../testdata/sd */
+const char *hal_storage_root(void);   /* ESP: "/sd"；Sim: 绝对路径 .../test_sd */
 bool hal_storage_mount(void);
 void hal_storage_get_free_kb(uint32_t *total_kb, uint32_t *free_kb);
 ```
@@ -294,16 +294,16 @@ void hal_system_reboot(void);
 ### Phase 2 — 文件管理器
 
 1. 迁移 `file_manager.c`，路径走 `hal_storage_root()`。
-2. 准备 `launcher/sim/testdata/sd/`（结构与 [`AGENTS.md`](AGENTS.md) 标准测试 SD 一致）：
+2. 准备 `launcher/sim/test_sd/`（结构与 [`AGENTS.md`](AGENTS.md) 标准测试 SD 一致）：
 
-   | 目录 | 用途 |
-   |------|------|
-   | `empty/` | 空目录 |
-   | `many/` | 接近 512 文件 |
-   | `names/` | 长文件名、CJK |
-   | `mixed/` | 目录+文件混排 |
-   | `media/` | wav、mp3、txt |
-   | `deep/a/b/c/` | 多级路径 |
+   | 目录          | 用途          |
+   | ------------- | ------------- |
+   | `empty/`      | 空目录        |
+   | `many/`       | 接近 512 文件 |
+   | `names/`      | 长文件名、CJK |
+   | `mixed/`      | 目录+文件混排 |
+   | `media/`      | wav、mp3、txt |
+   | `deep/a/b/c/` | 多级路径      |
 
 3. Sim **不链接** `preview_audio.c`；文本预览可选 Phase 2b。
 
@@ -319,10 +319,10 @@ void hal_system_reboot(void);
 
 ### Phase 4 — 预览（可选）
 
-| 模块 | Sim 策略 |
-|------|----------|
-| `preview_text.c` | 高价值；依赖 `platform_mem` |
-| `preview_audio.c` | 低优先级；stub 或 SDL 音频 |
+| 模块              | Sim 策略                    |
+| ----------------- | --------------------------- |
+| `preview_text.c`  | 高价值；依赖 `platform_mem` |
+| `preview_audio.c` | 低优先级；stub 或 SDL 音频  |
 
 **预估**：2–5 天。
 
@@ -342,26 +342,26 @@ PC Simulator 使用系统 `malloc`，可用内存为 GB 级，**不会自然触�
 
 ### 7.2 本项目中的内存敏感点
 
-| 场景 | 行为 | 相关 API |
-|------|------|----------|
+| 场景             | 行为                                                       | 相关 API                                                      |
+| ---------------- | ---------------------------------------------------------- | ------------------------------------------------------------- |
 | 文件列表 ≤512 项 | `malloc(want * sizeof(fm_entry_t))`，失败则日志 + `return` | `malloc`、`platform_free_heap`、`platform_largest_free_block` |
-| 进预览前 | `free(s_entries)` 腾堆 | 设计互斥 |
-| 音频歌单 | `malloc(512 * FM_NAME_LEN)` ≈ 64KB | `preview_audio.c` |
-| 音频任务栈 | FreeRTOS **32768 words**（≈128KB） | 与堆分离，Sim 难模拟 |
-| 文本预览 | 按 `free_heap` 决定读取大小；失败则减块重试 | `preview_text.c` |
-| LVGL | partial buffer ~15KB×2 + 控件堆 | 静态 + `CONFIG_LV_USE_CLIB_MALLOC` |
+| 进预览前         | `free(s_entries)` 腾堆                                     | 设计互斥                                                      |
+| 音频歌单         | `malloc(512 * FM_NAME_LEN)` ≈ 64KB                         | `preview_audio.c`                                             |
+| 音频任务栈       | FreeRTOS **32768 words**（≈128KB）                         | 与堆分离，Sim 难模拟                                          |
+| 文本预览         | 按 `free_heap` 决定读取大小；失败则减块重试                | `preview_text.c`                                              |
+| LVGL             | partial buffer ~15KB×2 + 控件堆                            | 静态 + `CONFIG_LV_USE_CLIB_MALLOC`                            |
 
 真机峰值：`s_entries` 与 `s_playlist` **不同时** 常驻；文本预览会 **动态缩读**。见 [`AGENTS.md`](AGENTS.md#flash--ram-参考精简后-launcher)。
 
 ### 7.3 能模拟 / 不能模拟
 
-| 能模拟（有价值） | 难 / 不能模拟 |
-|------------------|---------------|
-| `malloc` 失败路径 | `.dram0.bss` 链接期溢出 |
-| 文本「内存不足只读前半」 | `heap_caps` 多区域与碎片化 |
-| FM 大目录分配失败 | 音频任务 **栈** OOM |
-| 预览前释放 `s_entries` 的策略 | LVGL+IDF 真实堆占用曲线 |
-| | PSRAM / IRAM 差异 |
+| 能模拟（有价值）              | 难 / 不能模拟              |
+| ----------------------------- | -------------------------- |
+| `malloc` 失败路径             | `.dram0.bss` 链接期溢出    |
+| 文本「内存不足只读前半」      | `heap_caps` 多区域与碎片化 |
+| FM 大目录分配失败             | 音频任务 **栈** OOM        |
+| 预览前释放 `s_entries` 的策略 | LVGL+IDF 真实堆占用曲线    |
+|                               | PSRAM / IRAM 差异          |
 
 ### 7.4 三层模拟策略
 
@@ -394,17 +394,17 @@ Sim 启动参数示例：
 ```text
 --heap 180000          # 正常
 --heap 40000           # 文本必截断
---heap 50000           # + testdata/sd/many → FM alloc 可能失败
+--heap 50000           # + test_sd/many → FM alloc 可能失败
 ```
 
 ### 7.5 建议使用方式
 
-| 开发场景 | Simulator 堆配置 |
-|----------|------------------|
-| 日常 UI | 充足堆，不模拟 OOM |
-| 改 `preview_text.c` / `file_manager.c` 分配 | 层 1 或层 2 + 标准 testdata |
-| 音频 + 大目录并发 | **仍须真机** |
-| 链接期 BSS 溢出 | **仍须真机** build |
+| 开发场景                                    | Simulator 堆配置           |
+| ------------------------------------------- | -------------------------- |
+| 日常 UI                                     | 充足堆，不模拟 OOM         |
+| 改 `preview_text.c` / `file_manager.c` 分配 | 层 1 或层 2 + 标准 test_sd |
+| 音频 + 大目录并发                           | **仍须真机**               |
+| 链接期 BSS 溢出                             | **仍须真机** build         |
 
 ---
 
@@ -454,12 +454,12 @@ while (running) {
 
 ## 9. 测试策略
 
-| 层级 | 内容 |
-|------|------|
-| Sim 手动 | Home / FM / Settings / Screen Test + `testdata/sd` |
-| Sim 内存回归 | `--heap` 参数 + 大文本 + 512 目录 |
+| 层级              | 内容                                                             |
+| ----------------- | ---------------------------------------------------------------- |
+| Sim 手动          | Home / FM / Settings / Screen Test + `test_sd`                   |
+| Sim 内存回归      | `--heap` 参数 + 大文本 + 512 目录                                |
 | Host 单测（可选） | `fm_entry_compare`、`fm_build_path`、GB2312 解码 — 纯 C，无 LVGL |
-| 真机冒烟 | 音频、实 SD 卡、背光、GPIO 手感 |
+| 真机冒烟          | 音频、实 SD 卡、背光、GPIO 手感                                  |
 
 ---
 
@@ -476,13 +476,13 @@ while (running) {
 
 ## 11. 工作量粗估
 
-| 阶段 | 内容 | 预估 |
-|------|------|------|
-| Phase 0 | HAL 头 + ESP 薄适配 | 1–2 天 |
+| 阶段    | 内容                             | 预估   |
+| ------- | -------------------------------- | ------ |
+| Phase 0 | HAL 头 + ESP 薄适配              | 1–2 天 |
 | Phase 1 | Sim 窗口 + Home/Theme/ScreenTest | 2–3 天 |
-| Phase 2 | File manager + testdata | 2–3 天 |
-| Phase 3 | Settings + backlight | 1–2 天 |
-| Phase 4 | Text/audio preview | 2–5 天 |
+| Phase 2 | File manager + test_sd           | 2–3 天 |
+| Phase 3 | Settings + backlight             | 1–2 天 |
+| Phase 4 | Text/audio preview               | 2–5 天 |
 
 **Phase 1–2 完成** 即可覆盖大部分 UI 与文件列表的 PC 开发闭环。
 
@@ -506,4 +506,4 @@ while (running) {
 2. ESP 端 `launcher_main.c` 仅增加 `app_init()` / `app_tick()` 调用；业务文件暂留原路径，经适配层过渡。
 3. 第一个可交付：**SDL 窗口 + Home + Screen Test + 键盘映射**。
 
-实施完成后更新 [`AGENTS.md`](AGENTS.md)「如何提升开发效率」一节，补充 Sim 构建命令与 testdata 说明。
+实施完成后更新 [`AGENTS.md`](AGENTS.md)「如何提升开发效率」一节，补充 Sim 构建命令与 test_sd 说明。

@@ -41,7 +41,7 @@ static void ensure_root(void) {
       s_root[len] = '\0';
     }
   }
-  strncat(s_root, "testdata/sd", sizeof(s_root) - strlen(s_root) - 1);
+  strncat(s_root, "test_sd", sizeof(s_root) - strlen(s_root) - 1);
 #else
   if (!getcwd(s_root, sizeof(s_root))) {
     strncpy(s_root, ".", sizeof(s_root) - 1);
@@ -54,7 +54,7 @@ static void ensure_root(void) {
       s_root[len] = '\0';
     }
   }
-  strncat(s_root, "testdata/sd", sizeof(s_root) - strlen(s_root) - 1);
+  strncat(s_root, "test_sd", sizeof(s_root) - strlen(s_root) - 1);
 #endif
 
   size_t end = strlen(s_root);

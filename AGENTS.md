@@ -190,7 +190,7 @@ Launcher 在 `launcher_main.c` 中直连 ILI9341、`gamepad.c`、`/sd` POSIX API
 
 ### 若允许后续投入（按 ROI 排序）
 
-1. **LVGL PC Simulator（推荐）**：SDL 320×240 + 键盘映射 A/B/方向键；`ui_*.c` + `file_manager.c` 复用，HAL 用本地文件夹 `./testdata/sd` stub。UI 改动的大部分可在 PC 完成。
+1. **LVGL PC Simulator（推荐）**：SDL 320×240 + 键盘映射 A/B/方向键；`ui_*.c` + `file_manager.c` 复用，HAL 用本地文件夹 `./test_sd` stub。UI 改动的大部分可在 PC 完成。
 2. **文件列表逻辑单测**：排序、`fm_build_path`、512 边界、GB2312 解码抽成 host 测试，不依赖 GUI。
 3. **QEMU + esp_lcd_qemu_rgb**：需条件编译换显示驱动，仍缺手柄与 SD 接线，维护成本高于方案 1。
 

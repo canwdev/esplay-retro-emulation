@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$root = Join-Path $PSScriptRoot "sd\\many"
+$root = Join-Path $PSScriptRoot "many"
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 
 for ($i = 1; $i -le 512; $i++) {
