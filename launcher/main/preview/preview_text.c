@@ -28,6 +28,12 @@ static const char *TAG = "preview_text";
 #define TEXT_DECODE_WINDOW     8192
 #define TEXT_LINE_SPACE        4
 #define TEXT_LETTER_SPACE      1
+#define TEXT_INDEX_INITIAL_PAGES    8
+#define TEXT_INDEX_INITIAL_BUDGET_MS 20
+#define TEXT_INDEX_BACKGROUND_PAGES 16
+#define TEXT_INDEX_BACKGROUND_BUDGET_MS 10
+#define TEXT_INDEX_ON_DEMAND_PAGES  48
+#define TEXT_INDEX_ON_DEMAND_BUDGET_MS 25
 #define TEXT_PAGE_HOLD_MS_INITIAL 400
 #define TEXT_PAGE_HOLD_MS_REPEAT  80
 #define TEXT_PAGE_HOLD_FAST_MS    1200
@@ -50,6 +56,8 @@ typedef struct {
   int page_count;
   int page_cap;
   int cur_page;
+  bool index_complete;
+  int index_last_logged_pages;
 } text_doc_t;
 
 static text_doc_t s_doc;
@@ -381,10 +389,12 @@ static void text_doc_free(text_doc_t *doc) {
   memset(doc, 0, sizeof(*doc));
 }
 
-static bool text_doc_push_offset(text_doc_t *doc, size_t off) {
-  if (doc->page_count + 1 >= doc->page_cap) {
+static bool text_doc_ensure_offset_cap(text_doc_t *doc, int need_count) {
+  if (need_count > doc->page_cap) {
     int old_cap = doc->page_cap;
     int new_cap = old_cap ? old_cap * 2 : 128;
+    while (new_cap < need_count)
+      new_cap *= 2;
     uint32_t *n =
         prealloc(doc->page_off, (size_t)old_cap * sizeof(uint32_t),
                  (size_t)new_cap * sizeof(uint32_t));
@@ -393,7 +403,6 @@ static bool text_doc_push_offset(text_doc_t *doc, size_t off) {
     doc->page_off = n;
     doc->page_cap = new_cap;
   }
-  doc->page_off[doc->page_count++] = (uint32_t)off;
   return true;
 }
 
@@ -505,26 +514,39 @@ static bool text_next_page_offset(const text_doc_t *doc, size_t start,
 }
 
 static bool text_build_page_index(text_doc_t *doc, lv_coord_t max_w,
-                                  lv_coord_t max_h) {
-  size_t off = doc->bom_skip;
-  if (!text_doc_push_offset(doc, off))
+                                  lv_coord_t max_h, int max_new_pages,
+                                  uint32_t budget_ms) {
+  if (!text_doc_ensure_offset_cap(doc, 1))
     return false;
+  if (doc->page_count == 0)
+    doc->page_off[0] = (uint32_t)doc->bom_skip;
 
-  uint32_t last_yield_ms = platform_millis();
-  int last_logged_pages = 0;
+  size_t off = doc->page_off[doc->page_count];
+  int added = 0;
+  uint32_t started_ms = platform_millis();
+  uint32_t last_yield_ms = started_ms;
 
   while (off < doc->file_size) {
+    if (max_new_pages > 0 && added >= max_new_pages)
+      break;
+    if (budget_ms > 0 && added > 0 &&
+        (uint32_t)(platform_millis() - started_ms) >= budget_ms)
+      break;
+
     size_t next = off;
     if (!text_next_page_offset(doc, off, max_w, max_h, &next))
       return false;
     if (next <= off)
       next = off + 1;
-    if (!text_doc_push_offset(doc, next))
+    if (!text_doc_ensure_offset_cap(doc, doc->page_count + 2))
       return false;
+    doc->page_count++;
+    doc->page_off[doc->page_count] = (uint32_t)next;
     off = next;
+    added++;
 
-    if (doc->page_count - last_logged_pages >= 200) {
-      last_logged_pages = doc->page_count;
+    if (doc->page_count - doc->index_last_logged_pages >= 200) {
+      doc->index_last_logged_pages = doc->page_count;
       platform_log(PLATFORM_LOG_INFO, TAG, "indexing pages=%d off=%zu/%zu",
                    doc->page_count, off, doc->file_size);
     }
@@ -536,12 +558,13 @@ static bool text_build_page_index(text_doc_t *doc, lv_coord_t max_w,
     }
   }
 
-  doc->page_count -= 1; /* Last offset is sentinel. */
-  doc->cur_page = 0;
-  platform_log(PLATFORM_LOG_INFO, TAG,
-               "indexed %d pages encoding=%s file=%zu window=%u", doc->page_count,
-               text_encoding_name(doc->encoding), doc->file_size,
-               (unsigned)TEXT_DECODE_WINDOW);
+  doc->index_complete = off >= doc->file_size;
+  if (doc->index_complete) {
+    platform_log(PLATFORM_LOG_INFO, TAG,
+                 "indexed %d pages encoding=%s file=%zu window=%u",
+                 doc->page_count, text_encoding_name(doc->encoding),
+                 doc->file_size, (unsigned)TEXT_DECODE_WINDOW);
+  }
   return doc->page_count > 0;
 }
 
@@ -566,6 +589,31 @@ static bool text_decode_page(const text_doc_t *doc, int page, text_chunk_t *out)
   return ok;
 }
 
+static void text_update_status_label(void) {
+  if (s_status_label) {
+    char size_buf[16];
+    text_format_size(size_buf, sizeof(size_buf), s_doc.file_size);
+    if (s_doc.index_complete) {
+      int pct =
+          (s_doc.page_count > 1) ? (s_doc.cur_page * 100 / (s_doc.page_count - 1))
+                                 : 0;
+      lv_label_set_text_fmt(s_status_label, "%s  %d/%d  %d%%  %s",
+                            text_encoding_name(s_doc.encoding),
+                            s_doc.cur_page + 1, s_doc.page_count, pct, size_buf);
+    } else {
+      int idx_pct =
+          (s_doc.file_size > 0)
+              ? (int)(((uint64_t)s_doc.page_off[s_doc.page_count] * 100ULL) /
+                      (uint64_t)s_doc.file_size)
+              : 0;
+      lv_label_set_text_fmt(s_status_label, "%s  %d/%d+  idx %d%%  %s",
+                            text_encoding_name(s_doc.encoding),
+                            s_doc.cur_page + 1, s_doc.page_count, idx_pct,
+                            size_buf);
+    }
+  }
+}
+
 static void text_show_page(void) {
   if (!s_body_label || s_doc.page_count <= 0)
     return;
@@ -580,14 +628,7 @@ static void text_show_page(void) {
     lv_label_set_text(s_body_label, "(read error)");
   }
 
-  if (s_status_label) {
-    int pct = (s_doc.page_count > 1) ? (s_doc.cur_page * 100 / (s_doc.page_count - 1)) : 0;
-    char size_buf[16];
-    text_format_size(size_buf, sizeof(size_buf), s_doc.file_size);
-    lv_label_set_text_fmt(s_status_label, "%s  %d/%d  %d%%  %s",
-                          text_encoding_name(s_doc.encoding),
-                          s_doc.cur_page + 1, s_doc.page_count, pct, size_buf);
-  }
+  text_update_status_label();
 }
 
 static bool preview_text_can_open(const char *path) {
@@ -632,12 +673,16 @@ static bool preview_text_load(const char *path, text_doc_t *doc, lv_coord_t w, l
   doc->encoding =
       text_detect_encoding_sample(sample, sample_len, &doc->bom_skip);
   pfree(sample);
+  doc->cur_page = 0;
+  doc->index_complete = false;
+  doc->index_last_logged_pages = 0;
   platform_log(PLATFORM_LOG_INFO, TAG,
                "load %s size=%zu encoding=%s bom_skip=%zu heap=%u", path,
                doc->file_size, text_encoding_name(doc->encoding), doc->bom_skip,
                (unsigned)platform_free_heap());
 
-  if (!text_build_page_index(doc, w, h)) {
+  if (!text_build_page_index(doc, w, h, TEXT_INDEX_INITIAL_PAGES,
+                             TEXT_INDEX_INITIAL_BUDGET_MS)) {
     text_doc_free(doc);
     return false;
   }
@@ -663,20 +708,32 @@ static int preview_text_page_hold_step(uint32_t held_ms) {
 
 static void text_change_page(int delta) {
   if (s_doc.page_count <= 0) return;
-  if (delta == -1 && s_doc.cur_page == 0) {
+  if (delta < 0 && s_doc.cur_page == 0 && s_doc.index_complete) {
     s_doc.cur_page = s_doc.page_count - 1;
     text_show_page();
     return;
   }
-  if (delta == 1 && s_doc.cur_page == s_doc.page_count - 1) {
+  if (delta > 0 && s_doc.cur_page == s_doc.page_count - 1 && s_doc.index_complete) {
     s_doc.cur_page = 0;
     text_show_page();
     return;
   }
+
   int next = s_doc.cur_page + delta;
+  while (next >= s_doc.page_count && !s_doc.index_complete) {
+    int old_count = s_doc.page_count;
+    if (!text_build_page_index(&s_doc, s_page_w, s_page_h,
+                               TEXT_INDEX_ON_DEMAND_PAGES,
+                               TEXT_INDEX_ON_DEMAND_BUDGET_MS))
+      break;
+    if (s_doc.page_count == old_count)
+      break;
+  }
+
   if (next < 0) next = 0;
   if (next >= s_doc.page_count) next = s_doc.page_count - 1;
   if (next != s_doc.cur_page) { s_doc.cur_page = next; text_show_page(); }
+  else text_update_status_label();
 }
 
 static void preview_text_page_hold_tick(const input_gamepad_state *gp) {
@@ -697,6 +754,20 @@ static void preview_text_page_hold_tick(const input_gamepad_state *gp) {
     text_change_page(dir * step);
     s_page_hold_next_ms = now + TEXT_PAGE_HOLD_MS_REPEAT;
   }
+}
+
+static void preview_text_on_timer(void) {
+  if (!s_active || s_doc.index_complete)
+    return;
+
+  int old_count = s_doc.page_count;
+  if (!text_build_page_index(&s_doc, s_page_w, s_page_h,
+                             TEXT_INDEX_BACKGROUND_PAGES,
+                             TEXT_INDEX_BACKGROUND_BUDGET_MS))
+    return;
+
+  if (s_doc.page_count != old_count || s_doc.index_complete)
+    text_update_status_label();
 }
 
 static bool preview_text_open(const char *path, preview_open_args_t *args) {
@@ -744,5 +815,5 @@ static bool preview_text_on_key(const input_gamepad_state *gp, const bool edge[]
   preview_text_page_hold_tick(gp); return false;
 }
 
-const preview_app_t preview_text_app = { .id = "text", .can_open = preview_text_can_open, .open = preview_text_open, .close = preview_text_close, .on_key = preview_text_on_key };
+const preview_app_t preview_text_app = { .id = "text", .can_open = preview_text_can_open, .open = preview_text_open, .close = preview_text_close, .on_key = preview_text_on_key, .on_timer = preview_text_on_timer };
 
