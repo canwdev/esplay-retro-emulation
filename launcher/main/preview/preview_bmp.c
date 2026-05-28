@@ -4,6 +4,7 @@
 #include "hal_display.h"
 #include "platform_mem.h"
 #include "platform_log.h"
+#include "platform_time.h"
 #include "ui_backlight.h"
 
 #ifdef TARGET_SIM
@@ -20,6 +21,8 @@ static const char *TAG = "preview_bmp";
 
 #define BMP_MIN_SCALE 16U
 #define BMP_MAX_SCALE 1024U
+#define BMP_CANVAS_RESERVE_BYTES      (24U * 1024U)
+#define BMP_FIT_CANVAS_RESERVE_BYTES  (4U * 1024U)
 
 typedef struct {
   int32_t width;
@@ -32,13 +35,15 @@ typedef struct {
   bool top_down;
 } bmp_meta_t;
 
+#define BMP_CANVAS_TILES 12
+
 typedef struct {
   char path[FM_PATH_MAX];
   char cwd[FM_PATH_MAX];
   bmp_meta_t meta;
   FILE *file;
   uint8_t *row_buf;
-  lv_draw_buf_t *canvas_draw_buf;
+  lv_draw_buf_t *canvas_draw_bufs[BMP_CANVAS_TILES];
   uint32_t scale;
   uint32_t fit_scale;
   int32_t pan_x;
@@ -53,10 +58,11 @@ typedef struct {
   int shared_count;
   int shared_index;
   int shared_name_stride;
+  lv_obj_t *screen;
 } bmp_state_t;
 
 static bmp_state_t s_state;
-static lv_obj_t *s_canvas;
+static lv_obj_t *s_canvases[BMP_CANVAS_TILES];
 static bool s_active;
 
 static uint32_t bmp_zoom_next(uint32_t scale, bool zoom_in);
@@ -190,8 +196,8 @@ static uint32_t bmp_fit_scale(const bmp_meta_t *meta, lv_coord_t max_w,
   uint32_t scale = LV_MIN(sx, sy);
   if (scale == 0)
     scale = 1;
-  if (scale > LV_SCALE_NONE)
-    scale = LV_SCALE_NONE;
+  if (scale > BMP_MAX_SCALE)
+    scale = BMP_MAX_SCALE;
   return scale;
 }
 
@@ -218,44 +224,55 @@ static uint32_t bmp_canvas_bytes(lv_coord_t w, lv_coord_t h) {
 }
 
 static uint32_t bmp_current_canvas_bytes(void) {
-  if (!s_state.canvas_draw_buf)
-    return 0;
-  return (uint32_t)s_state.canvas_draw_buf->data_size;
+  uint32_t total = 0;
+  for (int i = 0; i < BMP_CANVAS_TILES; i++) {
+    if (s_state.canvas_draw_bufs[i])
+      total += s_state.canvas_draw_bufs[i]->data_size;
+  }
+  return total;
 }
 
-static uint32_t bmp_canvas_budget_bytes(void) {
-  uint32_t largest = platform_largest_free_block();
+
+
+static bool bmp_scale_fits_budget_with_reserve(uint32_t scale,
+                                               uint32_t reserve_bytes) {
+  lv_coord_t draw_w;
+  lv_coord_t draw_h;
+  bmp_scaled_size(scale, &draw_w, &draw_h);
+  
+  lv_coord_t req_w = LV_MIN(draw_w, s_state.viewport_w);
+  lv_coord_t req_h = LV_MIN(draw_h, s_state.viewport_h);
+
+  uint32_t need = bmp_canvas_bytes(req_w, req_h);
+  lv_coord_t tile_h = (req_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
+  uint32_t tile_need = bmp_canvas_bytes(req_w, tile_h);
+
 #ifdef TARGET_SIM
-  if (largest < 256 * 1024u)
-    return 256 * 1024u;
-  return largest;
+  return true;
 #else
-  if (largest > 32 * 1024u)
-    return largest - 24 * 1024u;
-  return largest;
+  uint32_t largest = platform_largest_free_block();
+  uint32_t free_heap = platform_free_heap();
+  uint32_t current = bmp_current_canvas_bytes();
+  
+  if (largest < tile_need)
+    return false;
+  if (free_heap + current < need + reserve_bytes)
+    return false;
+  return true;
 #endif
 }
 
-static bool bmp_scale_fits_budget(uint32_t scale) {
-  lv_coord_t draw_w;
-  lv_coord_t draw_h;
-  uint32_t need;
-  uint32_t budget;
-  bmp_scaled_size(scale, &draw_w, &draw_h);
-  need = bmp_canvas_bytes(draw_w, draw_h);
-  budget = bmp_canvas_budget_bytes() + bmp_current_canvas_bytes();
-  return need <= budget;
-}
-
-static uint32_t bmp_scale_fit_budget(uint32_t scale) {
+static uint32_t bmp_scale_fit_budget_with_reserve(uint32_t scale,
+                                                  uint32_t reserve_bytes) {
   uint32_t cur = scale;
-  while (cur > BMP_MIN_SCALE && !bmp_scale_fits_budget(cur)) {
+  while (cur > BMP_MIN_SCALE &&
+         !bmp_scale_fits_budget_with_reserve(cur, reserve_bytes)) {
     uint32_t next = bmp_zoom_next(cur, false);
     if (next >= cur)
       break;
     cur = next;
   }
-  if (!bmp_scale_fits_budget(cur))
+  if (!bmp_scale_fits_budget_with_reserve(cur, reserve_bytes))
     return 0;
   return cur;
 }
@@ -294,9 +311,15 @@ static void bmp_release_shared_list(void) {
 }
 
 static void bmp_release_canvas(void) {
-  if (s_state.canvas_draw_buf) {
-    lv_draw_buf_destroy(s_state.canvas_draw_buf);
-    s_state.canvas_draw_buf = NULL;
+  for (int i = 0; i < BMP_CANVAS_TILES; i++) {
+    if (s_state.canvas_draw_bufs[i]) {
+      lv_draw_buf_destroy(s_state.canvas_draw_bufs[i]);
+      s_state.canvas_draw_bufs[i] = NULL;
+    }
+    if (s_canvases[i]) {
+      lv_obj_delete(s_canvases[i]);
+      s_canvases[i] = NULL;
+    }
   }
   s_state.canvas_w = 0;
   s_state.canvas_h = 0;
@@ -368,102 +391,126 @@ static void bmp_clamp_pan(int32_t draw_w, int32_t draw_h) {
 static bool bmp_ensure_canvas(uint32_t scale) {
   lv_coord_t draw_w;
   lv_coord_t draw_h;
-  lv_draw_buf_t *draw_buf;
   uint32_t need;
   uint32_t current;
 
   bmp_scaled_size(scale, &draw_w, &draw_h);
-  if (s_state.canvas_draw_buf && s_state.canvas_w == draw_w &&
-      s_state.canvas_h == draw_h)
+  lv_coord_t req_w = LV_MIN(draw_w, s_state.viewport_w);
+  lv_coord_t req_h = LV_MIN(draw_h, s_state.viewport_h);
+
+  if (s_state.canvas_draw_bufs[0] && s_state.canvas_w == req_w &&
+      s_state.canvas_h == req_h)
     return true;
 
-  need = bmp_canvas_bytes(draw_w, draw_h);
+  need = bmp_canvas_bytes(req_w, req_h);
   current = bmp_current_canvas_bytes();
 
   /* Shrinking can safely free the old canvas first to reduce heap pressure. */
-  if (s_state.canvas_draw_buf && need <= current) {
+  if (s_state.canvas_draw_bufs[0] && need <= current) {
     bmp_release_canvas();
   }
 
-  draw_buf = lv_draw_buf_create((uint32_t)draw_w, (uint32_t)draw_h,
-                                LV_COLOR_FORMAT_NATIVE, LV_STRIDE_AUTO);
-  if (!draw_buf) {
-    platform_log(PLATFORM_LOG_WARN, TAG,
-                 "alloc failed row=%lu canvas=%lu current=%lu largest=%lu free=%lu scale=%u",
-                 (unsigned long)s_state.meta.row_size_bytes,
-                 (unsigned long)need, (unsigned long)current,
-                 (unsigned long)platform_largest_free_block(),
-                 (unsigned long)platform_free_heap(), (unsigned)scale);
-    return false;
+  bmp_release_canvas();
+  
+  lv_coord_t tile_h = (req_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
+  
+  for (int i = 0; i < BMP_CANVAS_TILES; i++) {
+    lv_coord_t th = tile_h;
+    if (i * tile_h >= req_h) {
+      th = 0;
+    } else if ((i + 1) * tile_h > req_h) {
+      th = req_h - i * tile_h;
+    }
+    
+    if (th > 0) {
+      lv_draw_buf_t *draw_buf = lv_draw_buf_create((uint32_t)req_w, (uint32_t)th,
+                                                   LV_COLOR_FORMAT_NATIVE, LV_STRIDE_AUTO);
+      if (!draw_buf) {
+        platform_log(PLATFORM_LOG_WARN, TAG,
+                     "alloc failed for tile %d row=%lu th=%d largest=%lu free=%lu scale=%u",
+                     i, (unsigned long)s_state.meta.row_size_bytes, (int)th,
+                     (unsigned long)platform_largest_free_block(),
+                     (unsigned long)platform_free_heap(), (unsigned)scale);
+        bmp_release_canvas();
+        return false;
+      }
+      s_state.canvas_draw_bufs[i] = draw_buf;
+      if (!s_canvases[i] && s_state.screen) {
+        s_canvases[i] = lv_canvas_create(s_state.screen);
+        lv_obj_remove_flag(s_canvases[i], LV_OBJ_FLAG_SCROLLABLE);
+      }
+      if (s_canvases[i]) {
+        lv_canvas_set_draw_buf(s_canvases[i], draw_buf);
+        lv_obj_set_size(s_canvases[i], req_w, th);
+        lv_obj_remove_flag(s_canvases[i], LV_OBJ_FLAG_HIDDEN);
+      }
+    } else {
+      if (s_canvases[i]) {
+        lv_obj_delete(s_canvases[i]);
+        s_canvases[i] = NULL;
+      }
+    }
   }
 
-  bmp_release_canvas();
-  s_state.canvas_draw_buf = draw_buf;
-  s_state.canvas_w = draw_w;
-  s_state.canvas_h = draw_h;
+  s_state.canvas_w = req_w;
+  s_state.canvas_h = req_h;
   s_state.canvas_scale = scale;
-  if (s_canvas) {
-    lv_canvas_set_draw_buf(s_canvas, s_state.canvas_draw_buf);
-    lv_obj_set_size(s_canvas, draw_w, draw_h);
-  }
   return true;
 }
 
 static bool bmp_render_canvas(void) {
-  int32_t y;
+  lv_coord_t draw_w, draw_h;
+  bmp_scaled_size(s_state.canvas_scale, &draw_w, &draw_h);
 
-  if (!s_canvas || !s_state.canvas_draw_buf) {
-    platform_log(PLATFORM_LOG_ERROR, TAG, "render precheck failed canvas=%p draw_buf=%p",
-                 (void *)s_canvas, (void *)s_state.canvas_draw_buf);
-    return false;
-  }
-  if (!s_state.canvas_draw_buf->data) {
-    platform_log(PLATFORM_LOG_ERROR, TAG,
-                 "render precheck failed data=NULL w=%d h=%d stride=%u",
-                 (int)s_state.canvas_w, (int)s_state.canvas_h,
-                 (unsigned)s_state.canvas_draw_buf->header.stride);
-    return false;
+  int32_t view_off_x = 0;
+  if (draw_w > s_state.viewport_w) {
+    view_off_x = (draw_w - s_state.viewport_w) / 2 - s_state.pan_x;
   }
 
-  lv_draw_buf_clear(s_state.canvas_draw_buf, NULL);
+  int32_t view_off_y = 0;
+  if (draw_h > s_state.viewport_h) {
+    view_off_y = (draw_h - s_state.viewport_h) / 2 - s_state.pan_y;
+  }
+
   s_state.cached_row = -1;
-  for (y = 0; y < s_state.canvas_h; ++y) {
-    int32_t src_y = ((int64_t)y * s_state.meta.height) / s_state.canvas_h;
-    uint16_t *dst = (uint16_t *)(s_state.canvas_draw_buf->data +
-                                 (size_t)y *
-                                     s_state.canvas_draw_buf->header.stride);
-    int32_t x;
+  
+  lv_coord_t tile_h = (s_state.canvas_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
+  
+  for (int t = 0; t < BMP_CANVAS_TILES; t++) {
+    lv_draw_buf_t *draw_buf = s_state.canvas_draw_bufs[t];
+    if (!draw_buf) continue;
+    
+    lv_draw_buf_clear(draw_buf, NULL);
+    
+    lv_coord_t th = draw_buf->header.h;
+    
+    for (int32_t y = 0; y < th; ++y) {
+      int32_t global_y = t * tile_h + y;
+      int32_t scaled_y = global_y + view_off_y;
+      int32_t src_y = ((int64_t)scaled_y * s_state.meta.height) / draw_h;
+      
+      uint16_t *dst = (uint16_t *)((uint8_t *)draw_buf->data +
+                                   (size_t)y * draw_buf->header.stride);
 
-    if (!dst) {
-      platform_log(PLATFORM_LOG_ERROR, TAG,
-                   "row dst NULL y=%d stride=%u data=%p",
-                   (int)y, (unsigned)s_state.canvas_draw_buf->header.stride,
-                   (void *)s_state.canvas_draw_buf->data);
-      return false;
+      if (src_y < 0) src_y = 0;
+      if (src_y >= s_state.meta.height) src_y = s_state.meta.height - 1;
+      if (!bmp_load_row(src_y)) return false;
+
+      for (int32_t x = 0; x < s_state.canvas_w; ++x) {
+        int32_t scaled_x = x + view_off_x;
+        int32_t src_x = ((int64_t)scaled_x * s_state.meta.width) / draw_w;
+        
+        if (src_x < 0) src_x = 0;
+        if (src_x >= s_state.meta.width) src_x = s_state.meta.width - 1;
+        
+        const uint8_t *src = s_state.row_buf + src_x * (s_state.meta.bpp / 8);
+        dst[x] = lv_color_to_u16(bmp_decode_pixel(src, s_state.meta.bpp));
+      }
     }
-
-    if (src_y < 0)
-      src_y = 0;
-    if (src_y >= s_state.meta.height)
-      src_y = s_state.meta.height - 1;
-    if (!bmp_load_row(src_y))
-      return false;
-
-    for (x = 0; x < s_state.canvas_w; ++x) {
-      int32_t src_x = ((int64_t)x * s_state.meta.width) / s_state.canvas_w;
-      const uint8_t *src;
-
-      if (src_x < 0)
-        src_x = 0;
-      if (src_x >= s_state.meta.width)
-        src_x = s_state.meta.width - 1;
-      src = s_state.row_buf + src_x * (s_state.meta.bpp / 8);
-      dst[x] = lv_color_to_u16(bmp_decode_pixel(src, s_state.meta.bpp));
-    }
+    lv_draw_buf_flush_cache(draw_buf, NULL);
+    if (s_canvases[t]) lv_obj_invalidate(s_canvases[t]);
+    platform_sleep_ms(1);
   }
-
-  lv_draw_buf_flush_cache(s_state.canvas_draw_buf, NULL);
-  lv_obj_invalidate(s_canvas);
   return true;
 }
 
@@ -476,11 +523,15 @@ static bool bmp_apply_transform(void) {
 
   if (!bmp_ensure_canvas(s_state.scale))
     return false;
-  if (s_state.canvas_scale != s_state.scale || s_state.canvas_w != draw_w ||
-      s_state.canvas_h != draw_h) {
+
+  lv_coord_t req_w = LV_MIN(draw_w, s_state.viewport_w);
+  lv_coord_t req_h = LV_MIN(draw_h, s_state.viewport_h);
+
+  if (s_state.canvas_scale != s_state.scale || s_state.canvas_w != req_w ||
+      s_state.canvas_h != req_h) {
     platform_log(PLATFORM_LOG_ERROR, TAG,
                  "canvas shape mismatch scale=%u want=%dx%d got=%dx%d scale_cached=%u",
-                 (unsigned)s_state.scale, (int)draw_w, (int)draw_h,
+                 (unsigned)s_state.scale, (int)req_w, (int)req_h,
                  (int)s_state.canvas_w, (int)s_state.canvas_h,
                  (unsigned)s_state.canvas_scale);
     return false;
@@ -489,8 +540,14 @@ static bool bmp_apply_transform(void) {
     platform_log(PLATFORM_LOG_ERROR, TAG, "render failed: %s", s_state.path);
     return false;
   }
-  lv_obj_set_pos(s_canvas, (s_state.viewport_w - draw_w) / 2 + s_state.pan_x,
-                 (s_state.viewport_h - draw_h) / 2 + s_state.pan_y);
+  
+  lv_coord_t tile_h = (req_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
+  for (int i = 0; i < BMP_CANVAS_TILES; i++) {
+    if (s_canvases[i] && s_state.canvas_draw_bufs[i]) {
+      lv_obj_set_pos(s_canvases[i], (s_state.viewport_w - req_w) / 2,
+                     (s_state.viewport_h - req_h) / 2 + i * tile_h);
+    }
+  }
   return true;
 }
 
@@ -518,15 +575,15 @@ static void bmp_pan_by(int32_t dx, int32_t dy) {
   s_state.pan_x += dx;
   s_state.pan_y += dy;
   bmp_clamp_pan(draw_w, draw_h);
-  lv_obj_set_pos(s_canvas, (s_state.viewport_w - draw_w) / 2 + s_state.pan_x,
-                 (s_state.viewport_h - draw_h) / 2 + s_state.pan_y);
+  bmp_apply_transform();
 }
 
-static bool bmp_set_scale(uint32_t scale, bool allow_reduce) {
+static bool bmp_set_scale_with_reserve(uint32_t scale, bool allow_reduce,
+                                       uint32_t reserve_bytes) {
   uint32_t target = scale;
   if (allow_reduce)
-    target = bmp_scale_fit_budget(target);
-  else if (!bmp_scale_fits_budget(target))
+    target = bmp_scale_fit_budget_with_reserve(target, reserve_bytes);
+  else if (!bmp_scale_fits_budget_with_reserve(target, reserve_bytes))
     return false;
   if (target == 0)
     return false;
@@ -536,9 +593,17 @@ static bool bmp_set_scale(uint32_t scale, bool allow_reduce) {
   return bmp_apply_transform();
 }
 
+static bool bmp_set_scale(uint32_t scale, bool allow_reduce) {
+  return bmp_set_scale_with_reserve(scale, allow_reduce,
+                                    BMP_CANVAS_RESERVE_BYTES);
+}
+
 static bool bmp_reset_view(bool fit_to_screen) {
-  return bmp_set_scale(fit_to_screen ? s_state.fit_scale : LV_SCALE_NONE,
-                       fit_to_screen);
+  if (fit_to_screen) {
+    return bmp_set_scale_with_reserve(s_state.fit_scale, true,
+                                      BMP_FIT_CANVAS_RESERVE_BYTES);
+  }
+  return bmp_set_scale(LV_SCALE_NONE, true);
 }
 
 static bool bmp_is_fit_view(void) {
@@ -572,8 +637,9 @@ static bool bmp_open_document(const char *path) {
     return false;
   }
 
-  fit_scale = bmp_scale_fit_budget(
-      bmp_fit_scale(&meta, s_state.viewport_w, s_state.viewport_h));
+  fit_scale = bmp_scale_fit_budget_with_reserve(
+      bmp_fit_scale(&meta, s_state.viewport_w, s_state.viewport_h),
+      BMP_FIT_CANVAS_RESERVE_BYTES);
   if (fit_scale == 0) {
     platform_log(PLATFORM_LOG_ERROR, TAG,
                  "no bmp scale fits memory w=%d h=%d largest=%lu free=%lu",
@@ -665,6 +731,7 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
   memset(&s_state, 0, sizeof(s_state));
   s_state.viewport_w = viewport_w;
   s_state.viewport_h = viewport_h;
+  s_state.screen = args->screen;
   if (args->cwd)
     strlcpy(s_state.cwd, args->cwd, sizeof(s_state.cwd));
   s_state.shared_name_stride = args->shared_name_stride;
@@ -678,8 +745,6 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
   lv_obj_clean(args->screen);
   lv_obj_set_style_pad_all(args->screen, 0, 0);
   lv_obj_set_style_border_width(args->screen, 0, 0);
-  s_canvas = lv_canvas_create(args->screen);
-  lv_obj_remove_flag(s_canvas, LV_OBJ_FLAG_SCROLLABLE);
 
   s_active = true;
   if (!bmp_apply_path(path, false)) {
@@ -693,7 +758,6 @@ static void preview_bmp_close(void) {
   bmp_release_canvas();
   bmp_release_doc();
   bmp_release_shared_list();
-  s_canvas = NULL;
   memset(&s_state, 0, sizeof(s_state));
   s_active = false;
 }
