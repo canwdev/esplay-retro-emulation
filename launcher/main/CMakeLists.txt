@@ -14,6 +14,7 @@ idf_component_register(
         "preview/preview_registry.c"
         "preview/preview_text.c"
         "preview/preview_audio.c"
+        "preview/preview_bmp.c"
         "../port/esp32/hal_audio_esp.c"
         "../port/esp32/hal_display_esp.c"
         "../port/esp32/hal_input_esp.c"

@@ -55,6 +55,7 @@ add_executable(launcher_sim
   ../main/preview/preview_registry.c
   ../main/preview/preview_text.c
   ../main/preview/preview_audio.c
+  ../main/preview/preview_bmp.c
 )
 
 target_compile_definitions(launcher_sim PRIVATE TARGET_SIM)
