@@ -1,12 +1,15 @@
 #include "ui_chrome.h"
 #include "ui_font.h"
 #include "ui_theme.h"
+#include "hal_display.h"
 #include "hal_power.h"
 #include "lvgl.h"
 
 #define UI_CHROME_BAR_H    16
 #define UI_CHROME_GAP      2
 #define UI_CHROME_SIDE_W   28
+#define UI_CHROME_PAD_HOR  12
+#define UI_CHROME_TITLE_W  (HAL_DISPLAY_WIDTH - UI_CHROME_PAD_HOR - UI_CHROME_SIDE_W * 2)
 
 static lv_obj_t *s_active_battery;
 
@@ -46,6 +49,7 @@ ui_chrome_t ui_chrome_create(lv_obj_t *parent, const char *title) {
   lv_obj_set_style_pad_hor(bar, 6, 0);
   lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(bar, 0, 0);
+  lv_obj_remove_flag(bar, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
   lv_obj_t *left = lv_obj_create(bar);
   lv_obj_remove_style_all(left);
@@ -56,10 +60,7 @@ ui_chrome_t ui_chrome_create(lv_obj_t *parent, const char *title) {
   chrome.title_label = lv_label_create(bar);
   lv_label_set_text(chrome.title_label, title ? title : "");
   ui_theme_style_label_accent(chrome.title_label);
-  lv_obj_set_flex_grow(chrome.title_label, 1);
-  lv_obj_set_width(chrome.title_label, 0);
-  lv_label_set_long_mode(chrome.title_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-  lv_obj_set_style_text_align(chrome.title_label, LV_TEXT_ALIGN_CENTER, 0);
+  ui_theme_style_label_truncated(chrome.title_label, UI_CHROME_TITLE_W);
 
   chrome.battery_label = lv_label_create(bar);
   lv_obj_set_width(chrome.battery_label, UI_CHROME_SIDE_W);

@@ -25,7 +25,7 @@
 | **Settings → Music**        | WAV/MP3 播放已集成到 **文件管理器预览**，无独立 Music 页                                           |
 | **独立 Music 目录**         | 不再创建或依赖 `/sd/audio`                                                                         |
 
-`launcher/components/` 当前应为空；`esplay-sdk/appfs` 若为断链 symlink，可忽略或删除，**不要**恢复 AppFS 组件。
+`launcher/components/` 当前应为空；**不要**恢复 AppFS 组件。
 
 `esplay-sdk/ugui/` 仍在仓库中但 **Launcher 未链接**，UI 只用 LVGL。
 
@@ -162,40 +162,10 @@ idf.py qemu monitor   # 或 idf.py qemu --graphics monitor（见下）
 
 ## 如何提升开发效率
 
-### 现状：PC 能做什么、不能做什么
-
-| 场景                              | PC（不改代码）   | 真机 |
-| --------------------------------- | ---------------- | ---- |
-| 编译 / 静态检查                   | ✅               | —    |
-| 启动、分区、纯 C 逻辑（GDB/串口） | ✅ QEMU          | ✅   |
-| GUI 布局、主题、列表滚动          | ❌               | ✅   |
-| 文件列表、FAT 长文件名            | ❌（可 PC 备卡） | ✅   |
-| 音频、背光、按键手感              | ❌               | ✅   |
-
-Launcher 在 `launcher_main.c` 中直连 ILI9341、`gamepad.c`、`/sd` POSIX API，**没有** host 模拟器或 LVGL PC target。QEMU 不能替代 UI 开发环境。
-
-### 不改代码即可用的做法
-
 1. **缩短烧录循环**：`idf.py app-flash monitor`；保持 monitor 常开，另终端 `build` + `app-flash`。
-2. **标准测试 SD 卡**：在 PC 上准备固定目录结构，上机只做验收：
-   - `empty/` 空目录
-   - `many/` 接近 512 文件（上限）
-   - `names/` 长文件名、中文/日文
-   - `mixed/` 目录+文件混排（验证排序）
-   - `media/` wav、mp3、txt
-   - `deep/a/b/c/` 多级路径
-3. **固定回归清单**：按改动范围只测子集（Home 焦点 / FM 滚动与删除 / Settings 主题 / 预览分页与切歌）。
-4. **串口辅助**：大目录或预览切换时看 heap 日志与 `opendir failed`，减少盲目盯屏。
-5. **QEMU 定位**：只用于启动与日志；**不要**在 QEMU 上调试 UI。
 
-### 若允许后续投入（按 ROI 排序）
+### PC Simulator（UI 快速迭代）
 
-1. **LVGL PC Simulator（推荐）**：SDL 320×240 + 键盘映射 A/B/方向键；`ui_*.c` + `file_manager.c` 复用，HAL 用本地文件夹 `./test_sd` stub。UI 改动的大部分可在 PC 完成。
-2. **文件列表逻辑单测**：排序、`fm_build_path`、512 边界、GB2312 解码抽成 host 测试，不依赖 GUI。
-3. **QEMU + esp_lcd_qemu_rgb**：需条件编译换显示驱动，仍缺手柄与 SD 接线，维护成本高于方案 1。
+仓库已提供 **LVGL PC Simulator**（`launcher/sim/`）：SDL 320×240 + 键盘映射，`ui_*.c` / `file_manager.c` 复用，SD 根目录 stub 为 `./test_sd`。构建、运行、按键、testdata、跨平台方案见 **[`launcher/sim/README.md`](launcher/sim/README.md)**。
 
-**Agent 注意**：用户未明确要求时，不要主动搭建 Simulator 或大规模 HAL 抽象；若任务仅涉及 UI 文案/布局，仍默认真机验证。
-
-## 与上游 README 的差异
-
-上游 `README.MD` 描述完整 retro 模拟器包、`.fw` 刷机、WiFi 传 ROM、AppFS 多 `.app`。**本 fork/现状** 仅为 **离线 Launcher + SD 文件/音频/文本预览**，开发时不要假设 AppFS 或 HTTP 可用。
+Simulator 可覆盖大部分 UI 与文件列表迭代；**ILI9341 观感、I2S 音频、GPIO/手柄** 等仍须真机验证。

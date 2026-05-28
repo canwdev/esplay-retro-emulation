@@ -1,6 +1,7 @@
 #include "ui_screen_test.h"
 #include "ui_app.h"
 #include "ui_settings.h"
+#include "ui_theme.h"
 #include "lvgl.h"
 
 typedef enum {
@@ -21,6 +22,8 @@ static lv_obj_t *s_label;
 static lv_obj_t *s_hint;
 static screen_test_mode_t s_mode;
 static bool s_active;
+
+#define SCREEN_TEST_OVERLAY_H 24
 
 static const char *screen_test_mode_name(screen_test_mode_t mode) {
   switch (mode) {
@@ -228,8 +231,8 @@ void ui_screen_test_open(void) {
   lv_obj_set_style_border_width(s_content, 0, 0);
 
   s_label = lv_label_create(g_ui.screen);
-  lv_obj_set_width(s_label, 300);
-  lv_label_set_long_mode(s_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+  ui_theme_style_label_truncated(s_label, 300);
+  lv_obj_set_height(s_label, SCREEN_TEST_OVERLAY_H);
   lv_obj_set_style_pad_all(s_label, 4, 0);
   lv_obj_set_style_radius(s_label, 2, 0);
   lv_obj_align(s_label, LV_ALIGN_TOP_MID, 0, 4);
@@ -237,6 +240,7 @@ void ui_screen_test_open(void) {
   s_hint = lv_label_create(g_ui.screen);
   lv_label_set_text(s_hint,
                     LV_SYMBOL_LEFT LV_SYMBOL_RIGHT " pattern   B back");
+  lv_obj_set_height(s_hint, SCREEN_TEST_OVERLAY_H);
   lv_obj_set_style_pad_all(s_hint, 4, 0);
   lv_obj_set_style_radius(s_hint, 2, 0);
   lv_obj_align(s_hint, LV_ALIGN_BOTTOM_MID, 0, -4);

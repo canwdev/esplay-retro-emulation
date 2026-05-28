@@ -23,17 +23,30 @@
 
 static const char *TAG = "preview_text";
 
-#define TEXT_RAW_MAX          (256 * 1024)
-#define TEXT_PAGE_MAX         4096
-#define TEXT_LINE_SPACE       4
+#define TEXT_DETECT_SAMPLE     4096
+#define TEXT_DECODE_WINDOW     16384
+#define TEXT_LINE_SPACE        4
 #define TEXT_PAGE_HOLD_MS_INITIAL 400
 #define TEXT_PAGE_HOLD_MS_REPEAT  80
+#define TEXT_PAGE_HOLD_FAST_MS    1200
+#define TEXT_PAGE_HOLD_FASTER_MS  2400
+#define TEXT_PAGE_HOLD_MAX_MS     4000
+#define TEXT_PAGE_HOLD_TURBO_MS   7000
+
+typedef enum {
+  TEXT_ENC_UTF8 = 0,
+  TEXT_ENC_GB2312,
+} text_encoding_t;
 
 typedef struct {
-  char *utf8;
-  size_t utf8_len;
+  char path[FM_PATH_MAX];
+  FILE *file;
+  size_t file_size;
+  size_t bom_skip;
+  text_encoding_t encoding;
   uint32_t *page_off;
   int page_count;
+  int page_cap;
   int cur_page;
 } text_doc_t;
 
@@ -44,12 +57,13 @@ static lv_obj_t *s_status_label;
 static bool s_active;
 static bool s_page_hold_armed;
 static int8_t s_page_hold_dir;
+static uint32_t s_page_hold_start_ms;
 static uint32_t s_page_hold_next_ms;
 
 static lv_coord_t s_page_w;
 static lv_coord_t s_page_h;
 
-/* ------------------------------------------------------------------ codec */
+/* ------------------------------------------------------------------ common */
 
 static void *pmalloc(size_t n) {
   return platform_malloc(n);
@@ -71,145 +85,487 @@ static void *prealloc(void *p, size_t old_n, size_t new_n) {
   return n;
 }
 
-static bool is_utf8(const uint8_t *s, size_t len) {
-  for (size_t i = 0; i < len; ) {
-    if (s[i] < 0x80) { i++; continue; }
-    if ((s[i] & 0xE0) == 0xC0 && i + 1 < len && (s[i + 1] & 0xC0) == 0x80) { i += 2; continue; }
-    if ((s[i] & 0xF0) == 0xE0 && i + 2 < len && (s[i + 1] & 0xC0) == 0x80 && (s[i + 2] & 0xC0) == 0x80) { i += 3; continue; }
-    if ((s[i] & 0xF8) == 0xF0 && i + 3 < len && (s[i + 1] & 0xC0) == 0x80 && (s[i + 2] & 0xC0) == 0x80 && (s[i + 3] & 0xC0) == 0x80) { i += 4; continue; }
+static void text_copy_path(char *dst, size_t dst_sz, const char *src) {
+  if (!dst || dst_sz == 0)
+    return;
+  if (!src)
+    src = "";
+  strncpy(dst, src, dst_sz - 1);
+  dst[dst_sz - 1] = '\0';
+}
+
+static void text_format_size(char *buf, size_t buf_sz, size_t bytes) {
+  if (bytes >= 1024 * 1024)
+    snprintf(buf, buf_sz, "%u.%uM", (unsigned)(bytes / (1024 * 1024)),
+             (unsigned)((bytes % (1024 * 1024)) * 10 / (1024 * 1024)));
+  else if (bytes >= 1024)
+    snprintf(buf, buf_sz, "%uK", (unsigned)(bytes / 1024));
+  else
+    snprintf(buf, buf_sz, "%uB", (unsigned)bytes);
+}
+
+static FILE *text_fopen(const char *path, const char *mode) {
+#ifdef TARGET_SIM
+  unsigned long winerr = 0;
+  FILE *f = sim_fopen_utf8(path, mode, &winerr);
+  if (!f)
+    platform_log(PLATFORM_LOG_ERROR, TAG, "fopen failed: %s (winerr=%lu)",
+                 path, winerr);
+  return f;
+#else
+  FILE *f = fopen(path, mode);
+  if (!f)
+    platform_log(PLATFORM_LOG_ERROR, TAG, "fopen failed: %s", path);
+  return f;
+#endif
+}
+
+static bool text_get_file_size(const char *path, size_t *out_size) {
+#ifdef TARGET_SIM
+  bool is_dir = false;
+  bool is_reg = false;
+  unsigned long size = 0;
+  unsigned long winerr = 0;
+  if (!sim_path_get_info_utf8(path, &is_dir, &is_reg, &size, &winerr) ||
+      !is_reg || size == 0) {
+    platform_log(PLATFORM_LOG_ERROR, TAG,
+                 "stat failed or file empty: %s (winerr=%lu)", path, winerr);
+    return false;
+  }
+  *out_size = (size_t)size;
+  return true;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size == 0) {
+    platform_log(PLATFORM_LOG_ERROR, TAG, "stat failed or file empty: %s",
+                 path);
+    return false;
+  }
+  *out_size = (size_t)st.st_size;
+  return true;
+#endif
+}
+
+/* ------------------------------------------------------------------ codec */
+
+static const char *text_encoding_name(text_encoding_t enc) {
+  return enc == TEXT_ENC_GB2312 ? "GB2312" : "UTF-8";
+}
+
+static bool utf8_decode_one(const uint8_t *s, size_t len, size_t *adv,
+                            uint32_t *cp) {
+  if (len == 0)
+    return false;
+
+  uint8_t b0 = s[0];
+  if (b0 < 0x80) {
+    *adv = 1;
+    *cp = b0;
+    return true;
+  }
+
+  size_t need = 0;
+  uint32_t val = 0;
+  if (b0 >= 0xC2 && b0 <= 0xDF) {
+    need = 2;
+    val = b0 & 0x1F;
+  } else if (b0 >= 0xE0 && b0 <= 0xEF) {
+    need = 3;
+    val = b0 & 0x0F;
+  } else if (b0 >= 0xF0 && b0 <= 0xF4) {
+    need = 4;
+    val = b0 & 0x07;
+  } else {
+    return false;
+  }
+
+  if (len < need)
+    return false;
+
+  for (size_t i = 1; i < need; i++) {
+    if ((s[i] & 0xC0) != 0x80)
+      return false;
+    val = (val << 6) | (uint32_t)(s[i] & 0x3F);
+  }
+
+  if ((need == 3 && val < 0x800) || (need == 4 && val < 0x10000) ||
+      val > 0x10FFFF || (val >= 0xD800 && val <= 0xDFFF))
+    return false;
+
+  *adv = need;
+  *cp = val;
+  return true;
+}
+
+static size_t utf8_expected_len(uint8_t b0) {
+  if (b0 < 0x80)
+    return 1;
+  if (b0 >= 0xC2 && b0 <= 0xDF)
+    return 2;
+  if (b0 >= 0xE0 && b0 <= 0xEF)
+    return 3;
+  if (b0 >= 0xF0 && b0 <= 0xF4)
+    return 4;
+  return 0;
+}
+
+static size_t utf8_encode(uint32_t cp, char *out) {
+  if (cp <= 0x7F) {
+    out[0] = (char)cp;
+    return 1;
+  }
+  if (cp <= 0x7FF) {
+    out[0] = (char)(0xC0 | (cp >> 6));
+    out[1] = (char)(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  if (cp <= 0xFFFF) {
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  out[0] = (char)(0xF0 | (cp >> 18));
+  out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+  out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+  out[3] = (char)(0x80 | (cp & 0x3F));
+  return 4;
+}
+
+static bool gb2312_pair(const uint8_t *s, size_t len, uint32_t *cp) {
+  if (len < 2 || s[0] < 0xA1 || s[0] > 0xF7 || s[1] < 0xA1 || s[1] > 0xFE)
+    return false;
+
+  uint16_t u = gb2312_uni[(s[0] - 0xA1) * 94 + (s[1] - 0xA1)];
+  *cp = (u == 0xFFFF) ? 0xFFFD : u;
+  return true;
+}
+
+static text_encoding_t text_detect_encoding_sample(const uint8_t *s, size_t len,
+                                                   size_t *bom_skip) {
+  *bom_skip = 0;
+  if (len >= 3 && s[0] == 0xEF && s[1] == 0xBB && s[2] == 0xBF) {
+    *bom_skip = 3;
+    return TEXT_ENC_UTF8;
+  }
+
+  size_t ascii = 0;
+  size_t utf8_chars = 0;
+  size_t gb_pairs = 0;
+  size_t bad_utf8 = 0;
+
+  for (size_t i = 0; i < len;) {
+    if (s[i] < 0x80) {
+      ascii++;
+      i++;
+      continue;
+    }
+
+    size_t adv = 0;
+    uint32_t cp = 0;
+    size_t need = utf8_expected_len(s[i]);
+    if (need > 0 && len - i < need)
+      break; /* A fixed-size sample may end in the middle of a UTF-8 char. */
+    if (utf8_decode_one(&s[i], len - i, &adv, &cp)) {
+      utf8_chars++;
+      i += adv;
+    } else {
+      bad_utf8++;
+      i++;
+    }
+  }
+
+  for (size_t i = 0; i + 1 < len;) {
+    uint32_t cp = 0;
+    if (s[i] < 0x80) {
+      i++;
+    } else if (gb2312_pair(&s[i], len - i, &cp)) {
+      gb_pairs++;
+      i += 2;
+    } else {
+      i++;
+    }
+  }
+
+  if (ascii == len)
+    return TEXT_ENC_UTF8;
+  if (utf8_chars > 0 && bad_utf8 == 0)
+    return TEXT_ENC_UTF8;
+  if (gb_pairs > 0 && gb_pairs > utf8_chars)
+    return TEXT_ENC_GB2312;
+  return TEXT_ENC_UTF8;
+}
+
+typedef struct {
+  char *text;
+  uint32_t *file_after;
+  size_t len;
+  bool eof;
+} text_chunk_t;
+
+static void text_chunk_free(text_chunk_t *chunk) {
+  if (!chunk)
+    return;
+  pfree(chunk->text);
+  pfree(chunk->file_after);
+  memset(chunk, 0, sizeof(*chunk));
+}
+
+static bool text_chunk_reserve(char **text, uint32_t **map, size_t cap) {
+  *text = pmalloc(cap + 1);
+  *map = pmalloc((cap + 1) * sizeof(uint32_t));
+  if (!*text || !*map) {
+    pfree(*text);
+    pfree(*map);
+    *text = NULL;
+    *map = NULL;
     return false;
   }
   return true;
 }
 
-static size_t utf8_encode(uint32_t cp, char *out) {
-  if (cp <= 0x7F) { out[0] = (char)cp; return 1; }
-  if (cp <= 0x7FF) { out[0] = (char)(0xC0 | (cp >> 6)); out[1] = (char)(0x80 | (cp & 0x3F)); return 2; }
-  if (cp <= 0xFFFF) { out[0] = (char)(0xE0 | (cp >> 12)); out[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[2] = (char)(0x80 | (cp & 0x3F)); return 3; }
-  out[0] = (char)(0xF0 | (cp >> 18)); out[1] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (char)(0x80 | (cp & 0x3F)); return 4;
-}
+static bool text_decode_raw(text_encoding_t enc, const uint8_t *raw,
+                            size_t raw_len, size_t file_start,
+                            text_chunk_t *out) {
+  size_t cap = (enc == TEXT_ENC_GB2312) ? (raw_len * 3 + 1) : (raw_len + 1);
+  if (!text_chunk_reserve(&out->text, &out->file_after, cap))
+    return false;
 
-static char *decode_text(uint8_t *raw, size_t len, size_t *out_len) {
-  if (len >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) { 
-    memmove(raw, raw + 3, len - 3);
-    len -= 3; 
+  size_t o = 0;
+  out->file_after[0] = (uint32_t)file_start;
+
+  for (size_t i = 0; i < raw_len;) {
+    uint32_t cp = 0;
+    size_t src_adv = 1;
+    char enc_buf[4];
+    size_t enc_len = 0;
+
+    if (enc == TEXT_ENC_UTF8) {
+      if (!utf8_decode_one(&raw[i], raw_len - i, &src_adv, &cp)) {
+        if (i + 4 >= raw_len)
+          break;
+        cp = '?';
+        src_adv = 1;
+      }
+    } else if (raw[i] < 0x80) {
+      cp = raw[i];
+      src_adv = 1;
+    } else if (gb2312_pair(&raw[i], raw_len - i, &cp)) {
+      src_adv = 2;
+    } else {
+      cp = '?';
+      src_adv = 1;
+    }
+
+    if (cp == '\r')
+      cp = '\n';
+
+    enc_len = utf8_encode(cp, enc_buf);
+    if (o + enc_len > cap)
+      break;
+
+    for (size_t j = 0; j < enc_len; j++) {
+      out->text[o++] = enc_buf[j];
+      out->file_after[o] = (uint32_t)(file_start + i + src_adv);
+    }
+    i += src_adv;
   }
 
-  if (is_utf8(raw, len)) {
-    platform_log(PLATFORM_LOG_INFO, TAG, "Decoding as UTF-8 (in-place), len: %zu",
-                 len);
-    for (size_t i = 0; i < len; i++) if (raw[i] == '\r') raw[i] = '\n';
-    raw[len] = '\0';
-    *out_len = len;
-    return (char *)raw;
-  }
-
-  /* GB2312 fallback */
-  platform_log(PLATFORM_LOG_INFO, TAG, "Decoding as GB2312, len: %zu", len);
-  
-  /* 1. Calculate exact required size to save RAM. 
-   * GB2312 (2 bytes) -> UTF-8 (3 bytes) is 1.5x max. 
-   */
-  size_t required = 0;
-  for (size_t i = 0; i < len; ) {
-    if (raw[i] < 0x80) { required++; i++; }
-    else { required += 3; i += 2; }
-  }
-
-  char *out = pmalloc(required + 1);
-  if (!out) { 
-    platform_log(PLATFORM_LOG_ERROR, TAG,
-                 "Failed to malloc for GB2312 decode (needed %zu)", required);
-    return NULL; 
-  }
-
-  size_t o = 0, i = 0;
-  while (i < len) {
-    if (raw[i] < 0x80) { out[o++] = (raw[i] == '\r' ? '\n' : (char)raw[i]); i++; }
-    else if (i + 1 < len && raw[i] >= 0xA1 && raw[i] <= 0xF7 && raw[i+1] >= 0xA1 && raw[i+1] <= 0xFE) {
-      uint16_t u = gb2312_uni[(raw[i] - 0xA1) * 94 + (raw[i+1] - 0xA1)];
-      o += utf8_encode(u == 0xFFFF ? 0xFFFD : u, &out[o]);
-      i += 2;
-    } else { out[o++] = '?'; i++; }
-  }
-  out[o] = '\0'; *out_len = o;
-  platform_log(PLATFORM_LOG_INFO, TAG, "GB2312 decoded, new len: %zu", o);
-  return out;
+  out->text[o] = '\0';
+  out->len = o;
+  return true;
 }
 
 /* ------------------------------------------------------------------ doc */
 
 static void text_doc_free(text_doc_t *doc) {
-  pfree(doc->utf8);
+  if (doc->file)
+    fclose(doc->file);
   pfree(doc->page_off);
   memset(doc, 0, sizeof(*doc));
 }
 
-static int text_build_pages(text_doc_t *doc, lv_coord_t max_w, lv_coord_t max_h) {
+static bool text_doc_push_offset(text_doc_t *doc, size_t off) {
+  if (doc->page_count + 1 >= doc->page_cap) {
+    int old_cap = doc->page_cap;
+    int new_cap = old_cap ? old_cap * 2 : 128;
+    uint32_t *n =
+        prealloc(doc->page_off, (size_t)old_cap * sizeof(uint32_t),
+                 (size_t)new_cap * sizeof(uint32_t));
+    if (!n)
+      return false;
+    doc->page_off = n;
+    doc->page_cap = new_cap;
+  }
+  doc->page_off[doc->page_count++] = (uint32_t)off;
+  return true;
+}
+
+static bool text_read_raw(const text_doc_t *doc, size_t off, size_t max_len,
+                          uint8_t *buf, size_t *out_len, bool *out_eof) {
+  if (!doc->file)
+    return false;
+
+  if (fseek(doc->file, (long)off, SEEK_SET) != 0)
+    return false;
+
+  size_t remain = doc->file_size > off ? doc->file_size - off : 0;
+  size_t want = remain < max_len ? remain : max_len;
+  size_t n = fread(buf, 1, want, doc->file);
+
+  *out_len = n;
+  *out_eof = (off + n) >= doc->file_size;
+  return n > 0 || *out_eof;
+}
+
+static bool text_decode_at(const text_doc_t *doc, size_t off, size_t max_len,
+                           text_chunk_t *chunk) {
+  uint8_t *raw = pmalloc(TEXT_DECODE_WINDOW);
+  size_t raw_len = 0;
+  bool eof = false;
+  size_t want = max_len < TEXT_DECODE_WINDOW ? max_len : TEXT_DECODE_WINDOW;
+
+  memset(chunk, 0, sizeof(*chunk));
+  if (!raw)
+    return false;
+  if (!text_read_raw(doc, off, want, raw, &raw_len, &eof)) {
+    pfree(raw);
+    return false;
+  }
+  if (!text_decode_raw(doc->encoding, raw, raw_len, off, chunk)) {
+    pfree(raw);
+    return false;
+  }
+  pfree(raw);
+  chunk->eof = eof;
+  return true;
+}
+
+static int text_max_lines(lv_coord_t max_h) {
   const lv_font_t *font = ui_font_default();
   lv_coord_t line_h = lv_font_get_line_height(font) + TEXT_LINE_SPACE;
   int max_lines = max_h / (line_h > 0 ? line_h : 14);
-  if (max_lines < 1) max_lines = 1;
-  platform_log(PLATFORM_LOG_INFO, TAG,
-               "Building pages: w=%d, h=%d, max_lines=%d", max_w, max_h,
-               max_lines);
+  return max_lines < 1 ? 1 : max_lines;
+}
 
+static bool text_next_page_offset(const text_doc_t *doc, size_t start,
+                                  lv_coord_t max_w, lv_coord_t max_h,
+                                  size_t *out_next) {
+  if (start >= doc->file_size) {
+    *out_next = doc->file_size;
+    return true;
+  }
+
+  text_chunk_t chunk;
+  if (!text_decode_at(doc, start, TEXT_DECODE_WINDOW, &chunk))
+    return false;
+  if (chunk.len == 0) {
+    text_chunk_free(&chunk);
+    *out_next = doc->file_size;
+    return true;
+  }
+
+  const lv_font_t *font = ui_font_default();
   lv_text_attributes_t attr;
   lv_text_attributes_init(&attr);
   attr.max_width = max_w;
   attr.line_space = TEXT_LINE_SPACE;
 
-  int cap = 64, pages = 0;
-  uint32_t *off = pmalloc(cap * sizeof(uint32_t));
-  if (!off) {
-    platform_log(PLATFORM_LOG_ERROR, TAG,
-                 "Failed to malloc for page offsets");
-    return -1;
+  size_t pos = 0;
+  int max_lines = text_max_lines(max_h);
+  for (int l = 0; l < max_lines && pos < chunk.len; l++) {
+    if (chunk.text[pos] == '\n') {
+      pos++;
+      continue;
+    }
+    uint32_t adv =
+        lv_text_get_next_line(&chunk.text[pos], chunk.len - pos, font, NULL,
+                              &attr);
+    pos += adv > 0 ? adv : 1;
   }
 
-  size_t pos = 0;
-  while (pos <= doc->utf8_len) {
-    if (pages >= cap) {
-      size_t old_n = (size_t)cap * sizeof(uint32_t);
-      cap *= 2;
-      uint32_t *n = prealloc(off, old_n, (size_t)cap * sizeof(uint32_t));
-      if (!n) {
-        platform_log(PLATFORM_LOG_ERROR, TAG,
-                     "Failed to realloc for page offsets");
-        pfree(off);
-        return -1;
-      }
-      off = n;
-    }
-    off[pages++] = (uint32_t)pos;
-    if (pos >= doc->utf8_len) break;
-    for (int l = 0; l < max_lines && pos < doc->utf8_len; l++) {
-      if (doc->utf8[pos] == '\n') { pos++; continue; }
-      uint32_t adv = lv_text_get_next_line(&doc->utf8[pos], doc->utf8_len - pos, font, NULL, &attr);
-      pos += (adv > 0 ? adv : 1);
-    }
+  if (pos >= chunk.len && !chunk.eof)
+    *out_next = chunk.file_after[chunk.len];
+  else
+    *out_next = chunk.file_after[pos < chunk.len ? pos : chunk.len];
+
+  if (*out_next <= start)
+    *out_next = start + 1;
+  if (*out_next > doc->file_size)
+    *out_next = doc->file_size;
+
+  text_chunk_free(&chunk);
+  return true;
+}
+
+static bool text_build_page_index(text_doc_t *doc, lv_coord_t max_w,
+                                  lv_coord_t max_h) {
+  size_t off = doc->bom_skip;
+  if (!text_doc_push_offset(doc, off))
+    return false;
+
+  while (off < doc->file_size) {
+    size_t next = off;
+    if (!text_next_page_offset(doc, off, max_w, max_h, &next))
+      return false;
+    if (next <= off)
+      next = off + 1;
+    if (!text_doc_push_offset(doc, next))
+      return false;
+    off = next;
   }
-  doc->page_off = off; doc->page_count = pages; doc->cur_page = 0;
-  platform_log(PLATFORM_LOG_INFO, TAG, "Total pages: %d", pages);
-  return 0;
+
+  doc->page_count -= 1; /* Last offset is sentinel. */
+  doc->cur_page = 0;
+  platform_log(PLATFORM_LOG_INFO, TAG,
+               "indexed %d pages encoding=%s file=%zu window=%u", doc->page_count,
+               text_encoding_name(doc->encoding), doc->file_size,
+               (unsigned)TEXT_DECODE_WINDOW);
+  return doc->page_count > 0;
+}
+
+static bool text_decode_page(const text_doc_t *doc, int page, text_chunk_t *out) {
+  size_t start = doc->page_off[page];
+  size_t end = doc->page_off[page + 1];
+  if (end < start)
+    return false;
+
+  uint8_t *raw = pmalloc(TEXT_DECODE_WINDOW);
+  size_t raw_len = 0;
+  bool eof = false;
+  if (!raw)
+    return false;
+  if (!text_read_raw(doc, start, end - start, raw, &raw_len, &eof)) {
+    pfree(raw);
+    return false;
+  }
+  (void)eof;
+  bool ok = text_decode_raw(doc->encoding, raw, raw_len, start, out);
+  pfree(raw);
+  return ok;
 }
 
 static void text_show_page(void) {
-  if (!s_body_label || !s_doc.utf8) return;
+  if (!s_body_label || s_doc.page_count <= 0)
+    return;
   if (s_doc.cur_page < 0) s_doc.cur_page = 0;
   if (s_doc.cur_page >= s_doc.page_count) s_doc.cur_page = s_doc.page_count - 1;
 
-  uint32_t start = s_doc.page_off[s_doc.cur_page];
-  uint32_t end = (s_doc.cur_page + 1 < s_doc.page_count) ? s_doc.page_off[s_doc.cur_page + 1] : (uint32_t)s_doc.utf8_len;
-
-  static char buf[TEXT_PAGE_MAX];
-  size_t n = (end - start < sizeof(buf)) ? (end - start) : (sizeof(buf) - 1);
-  memcpy(buf, s_doc.utf8 + start, n); buf[n] = '\0';
-  lv_label_set_text(s_body_label, buf);
+  text_chunk_t page;
+  if (text_decode_page(&s_doc, s_doc.cur_page, &page)) {
+    lv_label_set_text(s_body_label, page.text);
+    text_chunk_free(&page);
+  } else {
+    lv_label_set_text(s_body_label, "(read error)");
+  }
 
   if (s_status_label) {
     int pct = (s_doc.page_count > 1) ? (s_doc.cur_page * 100 / (s_doc.page_count - 1)) : 0;
-    lv_label_set_text_fmt(s_status_label, "%d/%d  %d%%", s_doc.cur_page + 1, s_doc.page_count, pct);
+    char size_buf[16];
+    text_format_size(size_buf, sizeof(size_buf), s_doc.file_size);
+    lv_label_set_text_fmt(s_status_label, "%s  %d/%d  %d%%  %s",
+                          text_encoding_name(s_doc.encoding),
+                          s_doc.cur_page + 1, s_doc.page_count, pct, size_buf);
   }
 }
 
@@ -228,142 +584,74 @@ static bool preview_text_can_open(const char *path) {
   unsigned long winerr = 0;
   if (!sim_path_get_info_utf8(path, &is_dir, &is_reg, &size, &winerr))
     return false;
-  return is_reg && size > 0 && size <= TEXT_RAW_MAX;
+  return is_reg && size > 0;
 #else
   struct stat st;
-  return (stat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 &&
-          st.st_size <= TEXT_RAW_MAX);
+  return (stat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0);
 #endif
 }
 
 static bool preview_text_load(const char *path, text_doc_t *doc, lv_coord_t w, lv_coord_t h) {
-#ifdef TARGET_SIM
-  bool is_dir = false;
-  bool is_reg = false;
-  unsigned long size = 0;
-  unsigned long winerr = 0;
-  if (!sim_path_get_info_utf8(path, &is_dir, &is_reg, &size, &winerr) || !is_reg ||
-      size == 0) {
-    platform_log(PLATFORM_LOG_ERROR, TAG,
-                 "stat failed or file empty: %s (winerr=%lu)", path, winerr);
-    return false;
-  }
-  size_t full_sz = (size_t)size;
-#else
-  struct stat st;
-  if (stat(path, &st) != 0 || st.st_size == 0) {
-    platform_log(PLATFORM_LOG_ERROR, TAG, "stat failed or file empty: %s", path);
-    return false;
-  }
-  size_t full_sz = (size_t)st.st_size;
-#endif
-
-  uint32_t free_heap = (uint32_t)platform_free_heap();
-  
-  /* 
-   * Strategy:
-   * 1. UTF-8 is in-place, so it needs ~ sz bytes.
-   * 2. GB2312 needs sz (raw) + sz * 1.5 (decoded) = 2.5 * sz bytes.
-   * We don't know the encoding yet, so we read a small header first.
-   */
-#ifdef TARGET_SIM
-  FILE *f = sim_fopen_utf8(path, "rb", &winerr);
-  if (!f) {
-    platform_log(PLATFORM_LOG_ERROR, TAG, "fopen failed: %s (winerr=%lu)", path,
-                 winerr);
-    return false;
-  }
-#else
-  FILE *f = fopen(path, "rb");
-  if (!f) {
-    platform_log(PLATFORM_LOG_ERROR, TAG, "fopen failed: %s", path);
-    return false;
-  }
-#endif
-
-  uint8_t header[1024];
-  size_t header_len = fread(header, 1, sizeof(header), f);
-  bool maybe_utf8 = is_utf8(header, header_len);
-  fseek(f, 0, SEEK_SET);
-
-  size_t sz_limit = maybe_utf8 ? (free_heap - 24576) : (free_heap / 4);
-  if (sz_limit > TEXT_RAW_MAX) sz_limit = TEXT_RAW_MAX;
-
-  size_t sz = (full_sz > sz_limit) ? sz_limit : full_sz;
-  
-  platform_log(PLATFORM_LOG_INFO, TAG,
-               "Loading file: %s, size: %zu, maybe_utf8: %d, heap free: %u, "
-               "target sz: %zu",
-               path, full_sz, maybe_utf8, free_heap, sz);
-
-retry_load:
-  uint8_t *raw = NULL;
-  size_t attempt_sz = sz;
-  while (attempt_sz > 0) {
-    raw = pmalloc(attempt_sz + 1);
-    if (raw) {
-      sz = attempt_sz;
-      break;
-    }
-    if (attempt_sz <= 4096) break;
-    attempt_sz -= 4096;
-  }
-
-  if (!raw) {
-    platform_log(PLATFORM_LOG_ERROR, TAG,
-                 "Failed to malloc raw buffer, heap free: %u",
-                 (unsigned)platform_free_heap());
-    fclose(f);
-    return false;
-  }
-
-  if (sz < full_sz) {
-    platform_log(PLATFORM_LOG_WARN, TAG,
-                 "File too large for heap, loading only first %zu bytes", sz);
-  }
-
-  fseek(f, 0, SEEK_SET);
-  size_t n = fread(raw, 1, sz, f);
-  fclose(f);
-
   memset(doc, 0, sizeof(*doc));
-  char *decoded = decode_text(raw, n, &doc->utf8_len);
-  if (!decoded) {
-    /* If decode_text failed due to OOM, retry with a smaller chunk. */
-    pfree(raw);
-    if (sz > 4096) {
-      sz /= 2;
-#ifdef TARGET_SIM
-      platform_log(PLATFORM_LOG_WARN, TAG,
-                   "Decode failed (likely OOM), retrying with sz=%zu", sz);
-      f = sim_fopen_utf8(path, "rb", &winerr);
-#else
-      platform_log(PLATFORM_LOG_WARN, TAG,
-                   "Decode failed (likely OOM), retrying with sz=%zu", sz);
-      f = fopen(path, "rb");
-#endif
-      if (f) goto retry_load;
-    }
-    platform_log(PLATFORM_LOG_ERROR, TAG, "decode_text failed");
+  text_copy_path(doc->path, sizeof(doc->path), path);
+  if (!text_get_file_size(path, &doc->file_size))
+    return false;
+
+  doc->file = text_fopen(path, "rb");
+  if (!doc->file)
+    return false;
+
+  uint8_t *sample = pmalloc(TEXT_DETECT_SAMPLE);
+  if (!sample) {
+    text_doc_free(doc);
     return false;
   }
+  size_t sample_len = fread(sample, 1, TEXT_DETECT_SAMPLE, doc->file);
 
-  doc->utf8 = decoded;
-  if (decoded != (char *)raw) {
-    pfree(raw);
-  }
-  
-  if (text_build_pages(doc, w, h) != 0) {
-    platform_log(PLATFORM_LOG_ERROR, TAG, "text_build_pages failed");
+  doc->encoding =
+      text_detect_encoding_sample(sample, sample_len, &doc->bom_skip);
+  pfree(sample);
+  platform_log(PLATFORM_LOG_INFO, TAG,
+               "load %s size=%zu encoding=%s bom_skip=%zu heap=%u", path,
+               doc->file_size, text_encoding_name(doc->encoding), doc->bom_skip,
+               (unsigned)platform_free_heap());
+
+  if (!text_build_page_index(doc, w, h)) {
     text_doc_free(doc);
     return false;
   }
   return true;
 }
 
-static void preview_text_page_hold_reset(void) { s_page_hold_armed = false; s_page_hold_dir = 0; }
+static void preview_text_page_hold_reset(void) {
+  s_page_hold_armed = false;
+  s_page_hold_dir = 0;
+}
+
+static int preview_text_page_hold_step(uint32_t held_ms) {
+  if (held_ms >= TEXT_PAGE_HOLD_TURBO_MS)
+    return 100;
+  if (held_ms >= TEXT_PAGE_HOLD_MAX_MS)
+    return 50;
+  if (held_ms >= TEXT_PAGE_HOLD_FASTER_MS)
+    return 10;
+  if (held_ms >= TEXT_PAGE_HOLD_FAST_MS)
+    return 5;
+  return 1;
+}
+
 static void text_change_page(int delta) {
   if (s_doc.page_count <= 0) return;
+  if (delta == -1 && s_doc.cur_page == 0) {
+    s_doc.cur_page = s_doc.page_count - 1;
+    text_show_page();
+    return;
+  }
+  if (delta == 1 && s_doc.cur_page == s_doc.page_count - 1) {
+    s_doc.cur_page = 0;
+    text_show_page();
+    return;
+  }
   int next = s_doc.cur_page + delta;
   if (next < 0) next = 0;
   if (next >= s_doc.page_count) next = s_doc.page_count - 1;
@@ -377,11 +665,16 @@ static void preview_text_page_hold_tick(const input_gamepad_state *gp) {
   int8_t dir = next ? 1 : -1;
   uint32_t now = lv_tick_get();
   if (!s_page_hold_armed || s_page_hold_dir != dir) {
-    s_page_hold_armed = true; s_page_hold_dir = dir; s_page_hold_next_ms = now + TEXT_PAGE_HOLD_MS_INITIAL;
+    s_page_hold_armed = true;
+    s_page_hold_dir = dir;
+    s_page_hold_start_ms = now;
+    s_page_hold_next_ms = now + TEXT_PAGE_HOLD_MS_INITIAL;
     return;
   }
   if ((int32_t)(now - s_page_hold_next_ms) >= 0) {
-    text_change_page(dir); s_page_hold_next_ms = now + TEXT_PAGE_HOLD_MS_REPEAT;
+    int step = preview_text_page_hold_step(now - s_page_hold_start_ms);
+    text_change_page(dir * step);
+    s_page_hold_next_ms = now + TEXT_PAGE_HOLD_MS_REPEAT;
   }
 }
 

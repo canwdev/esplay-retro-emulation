@@ -1,4 +1,4 @@
 /build/
-# /test_sd/
+/test_sd/
 *.log
 *.ini

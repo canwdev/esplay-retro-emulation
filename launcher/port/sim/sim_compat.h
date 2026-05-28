@@ -99,7 +99,90 @@ static inline bool sim_delete_utf8(const char *path,
       *out_winerr = (unsigned long)GetLastError();
     return false;
   }
-  if (!DeleteFileW(wpath)) {
+
+  DWORD attr = GetFileAttributesW(wpath);
+  if (attr == INVALID_FILE_ATTRIBUTES) {
+    if (out_winerr)
+      *out_winerr = (unsigned long)GetLastError();
+    return false;
+  }
+  SetFileAttributesW(wpath, attr & ~FILE_ATTRIBUTE_READONLY);
+
+  if ((attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    if (!DeleteFileW(wpath)) {
+      if (out_winerr)
+        *out_winerr = (unsigned long)GetLastError();
+      return false;
+    }
+    return true;
+  }
+
+  wchar_t search[1024];
+  int wlen = lstrlenW(wpath);
+  if (wlen <= 0 || wlen + 3 >= (int)(sizeof(search) / sizeof(search[0]))) {
+    if (out_winerr)
+      *out_winerr = ERROR_BUFFER_OVERFLOW;
+    return false;
+  }
+  lstrcpyW(search, wpath);
+  if (search[wlen - 1] != L'\\' && search[wlen - 1] != L'/')
+    lstrcatW(search, L"\\");
+  lstrcatW(search, L"*");
+
+  WIN32_FIND_DATAW fd;
+  HANDLE h = FindFirstFileW(search, &fd);
+  if (h != INVALID_HANDLE_VALUE) {
+    do {
+      if (lstrcmpW(fd.cFileName, L".") == 0 ||
+          lstrcmpW(fd.cFileName, L"..") == 0)
+        continue;
+
+      wchar_t child[1024];
+      if (wlen + 1 + lstrlenW(fd.cFileName) >=
+          (int)(sizeof(child) / sizeof(child[0]))) {
+        FindClose(h);
+        if (out_winerr)
+          *out_winerr = ERROR_BUFFER_OVERFLOW;
+        return false;
+      }
+      lstrcpyW(child, wpath);
+      if (child[wlen - 1] != L'\\' && child[wlen - 1] != L'/')
+        lstrcatW(child, L"\\");
+      lstrcatW(child, fd.cFileName);
+
+      int needed = WideCharToMultiByte(CP_UTF8, 0, child, -1, NULL, 0, NULL, NULL);
+      char child_utf8[1024];
+      if (needed <= 0 || needed > (int)sizeof(child_utf8) ||
+          WideCharToMultiByte(CP_UTF8, 0, child, -1, child_utf8,
+                              (int)sizeof(child_utf8), NULL, NULL) <= 0) {
+        FindClose(h);
+        if (out_winerr)
+          *out_winerr = (unsigned long)GetLastError();
+        return false;
+      }
+      if (!sim_delete_utf8(child_utf8, out_winerr)) {
+        FindClose(h);
+        return false;
+      }
+    } while (FindNextFileW(h, &fd));
+
+    DWORD find_err = GetLastError();
+    FindClose(h);
+    if (find_err != ERROR_NO_MORE_FILES) {
+      if (out_winerr)
+        *out_winerr = (unsigned long)find_err;
+      return false;
+    }
+  } else {
+    DWORD find_err = GetLastError();
+    if (find_err != ERROR_FILE_NOT_FOUND) {
+      if (out_winerr)
+        *out_winerr = (unsigned long)find_err;
+      return false;
+    }
+  }
+
+  if (!RemoveDirectoryW(wpath)) {
     if (out_winerr)
       *out_winerr = (unsigned long)GetLastError();
     return false;

@@ -12,16 +12,52 @@ typedef struct {
 } ui_theme_palette_t;
 
 static const ui_theme_palette_t s_palettes[UI_THEME_COUNT] = {
-    {"Dark", 0x0A0A0A, 0x141414, 0xB0B0B0, 0x606060, 0x00E676, 0x123820},
-    {"Light", 0xE8E8E8, 0xFFFFFF, 0x222222, 0x666666, 0x007A3D, 0x6FD098},
-    {"Red Dark", 0x0C0808, 0x181010, 0xD8B8B8, 0x685050, 0xFF5252, 0x3A1414},
-    {"Red Light", 0xF5EDED, 0xFFFFFF, 0x2A1515, 0x8A6060, 0xD32F2F, 0xF8BBBB},
-    {"Yellow Dark", 0x0C0B06, 0x18160E, 0xD8D0B0, 0x686040, 0xFFD740, 0x3A300E},
-    {"Yellow Light", 0xF5F2E8, 0xFFFFFF, 0x2A2410, 0x8A7040, 0xF9A825, 0xFFE082},
-    {"Purple Dark", 0x0A080E, 0x16121C, 0xC8B8D8, 0x605068, 0xB388FF, 0x241638},
-    {"Purple Light", 0xF0EBF8, 0xFFFFFF, 0x221633, 0x726080, 0x7C4DFF, 0xD1C4E9},
-    {"Blue Dark", 0x060812, 0x101422, 0xB0B8D8, 0x505868, 0x448AFF, 0x102044},
-    {"Blue Light", 0xE8EEF8, 0xFFFFFF, 0x101828, 0x506080, 0x1565C0, 0x90CAF9},
+  /* ------------------- 绿色系 (Green / Emerald) ------------------- */
+  // M3 Green Dark: 极深墨绿底，高亮采用春绿
+  {"Green Dark",    0x0C0F0D, 0x181E1A, 0xE2E3E0, 0x8C928E, 0x00E676, 0x00522B},
+  // M3 Green Light: 清爽薄荷乳白底
+  {"Green Light",   0xF6FBF7, 0xFFFFFF, 0x191C1A, 0x5C635E, 0x007A3D, 0xC1E8CD},
+
+  /* ------------------- 红色系 (Red / Error) ------------------- */
+  // M3 Red Dark: 带有微弱红晕的黑底，高亮用 Material 鲜红
+  {"Red Dark",      0x0F0C0C, 0x1F1919, 0xF2E4E4, 0x958888, 0xFF5252, 0x680003},
+  // M3 Red Light: 温暖樱花白底
+  {"Red Light",     0xFFFBFA, 0xFFFFFF, 0x221717, 0x655656, 0xBA1A1A, 0xFFDAD6},
+
+  /* ------------------- 黄色系 (Yellow / Amber) ------------------- */
+  // M3 Yellow Dark: 琥珀金暗底
+  {"Yellow Dark",   0x0F0E0B, 0x1E1B12, 0xECE1D5, 0x968F85, 0xFFD740, 0x574300},
+  // M3 Yellow Light: 象牙沙滩白
+  {"Yellow Light",  0xFFFBFF, 0xFFFFFF, 0x1E1B16, 0x635E54, 0x7A5B00, 0xFFDF9E},
+
+  /* ------------------- 紫色系 (Purple / Orchid) ------------------- */
+  // M3 Purple Dark: 优雅薰衣草暗底
+  {"Purple Dark",   0x0E0B12, 0x1C1625, 0xE7E0EC, 0x928F99, 0xB388FF, 0x4F378B},
+  // M3 Purple Light: 丁香紫白底
+  {"Purple Light",  0xFFFBFF, 0xFFFFFF, 0x1D192B, 0x625B71, 0x6750A4, 0xEADDFF},
+
+  /* ------------------- 蓝色系 (Blue / Indigo) ------------------- */
+  // M3 Blue Dark: 深邃星空蓝底
+  {"Blue Dark",     0x0B0E14, 0x141B28, 0xE2E2E6, 0x8E9199, 0x448AFF, 0x00458F},
+  // M3 Blue Light: 蔚蓝晴空底
+  {"Blue Light",    0xF8F9FF, 0xFFFFFF, 0x191C20, 0x575E6A, 0x005FAF, 0xD4E3FF},
+
+  /* =================== 以下为新增的 Material 颜色 =================== */
+
+  /* ------------------- 橙色系 (Orange / Tangerine) ------------------- */
+  // 工业/警示/运动感强烈
+  {"Orange Dark",   0x100D0B, 0x201A16, 0xECE0DB, 0x978E8A, 0xFF9100, 0x623100},
+  {"Orange Light",  0xFFFBFF, 0xFFFFFF, 0x201A17, 0x645C58, 0x8B5000, 0xFFDCBE},
+
+  /* ------------------- 青色系 (Cyan / Teal) ------------------- */
+  // 极具未来感与科技感，对 LCD 屏幕非常友好
+  {"Cyan Dark",     0x0B0F10, 0x151E20, 0xE0E3E3, 0x899294, 0x00E5FF, 0x004F58},
+  {"Cyan Light",    0xF4FAFA, 0xFFFFFF, 0x161D1E, 0x566162, 0x006A75, 0xA1EFFC},
+
+  /* ------------------- 粉红系 (Pink / Rose) ------------------- */
+  // 现代、时尚，高对比度
+  {"Pink Dark",     0x100B0D, 0x211419, 0xECE0E2, 0x988E90, 0xFF4081, 0x630631},
+  {"Pink Light",    0xFFFBFF, 0xFFFFFF, 0x201A1B, 0x645C5D, 0x8F496B, 0xFFD9E6},
 };
 
 static lv_color_t s_bg;
@@ -135,6 +171,36 @@ void ui_theme_style_label_accent(lv_obj_t *label) {
   lv_obj_set_style_text_color(label, s_accent, 0);
 }
 
+void ui_theme_style_label_truncated(lv_obj_t *label, lv_coord_t width) {
+  const lv_font_t *font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+  if (!font)
+    font = ui_font_default();
+  lv_coord_t lh = lv_font_get_line_height(font);
+  if (width > 0)
+    lv_obj_set_width(label, width);
+  lv_obj_set_height(label, lh);
+  lv_obj_set_style_text_line_space(label, 0, 0);
+  lv_obj_set_style_pad_all(label, 0, 0);
+  lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_remove_flag(label, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+}
+
+void ui_theme_style_label_row(lv_obj_t *label, lv_coord_t row_h) {
+  const lv_font_t *font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+  if (!font)
+    font = ui_font_default();
+  lv_coord_t lh = lv_font_get_line_height(font);
+  lv_coord_t pad = (row_h - lh) / 2;
+  if (pad < 0)
+    pad = 0;
+  lv_obj_set_height(label, row_h);
+  lv_obj_set_style_text_line_space(label, 0, 0);
+  lv_obj_set_style_pad_top(label, pad, 0);
+  lv_obj_set_style_pad_bottom(label, 0, 0);
+  lv_obj_remove_flag(label, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+}
+
 void ui_theme_style_btn(lv_obj_t *btn) { ui_theme_style_list_btn(btn); }
 
 void ui_theme_style_list(lv_obj_t *list) {
@@ -235,8 +301,10 @@ void ui_theme_apply_msgbox(lv_obj_t *mbox) {
 
   ui_theme_style_tree(mbox);
 
-  if (title)
+  if (title) {
     ui_theme_style_label_accent(title);
+    ui_theme_style_label_truncated(title, 264);
+  }
 }
 
 void ui_theme_style_bar(lv_obj_t *bar) {
@@ -272,3 +340,4 @@ lv_color_t ui_theme_color_accent(void) { return s_accent; }
 lv_color_t ui_theme_color_text(void) { return s_text; }
 lv_color_t ui_theme_color_text_dim(void) { return s_text_dim; }
 lv_color_t ui_theme_color_panel(void) { return s_panel; }
+lv_color_t ui_theme_color_focus_bg(void) { return s_focus_bg; }

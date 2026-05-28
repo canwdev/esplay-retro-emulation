@@ -104,7 +104,7 @@ void ui_home_create(void) {
   lv_obj_clean(g_ui.screen);
   ui_theme_apply_screen(g_ui.screen);
 
-  s_chrome = ui_chrome_create(g_ui.screen, "ESPLAY");
+  s_chrome = ui_chrome_create(g_ui.screen, "ESPLAY NEO FIRMWARE");
 
   lv_coord_t body_top = ui_chrome_body_top();
   lv_obj_t *center = lv_obj_create(g_ui.screen);

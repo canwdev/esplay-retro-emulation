@@ -38,6 +38,10 @@ static const char *TAG = "file_manager";
 /* Long-press auto-scroll timing (ms). */
 #define FM_HOLD_MS_INITIAL 400
 #define FM_HOLD_MS_REPEAT  80
+/* Delay before a focused long filename starts horizontal scrolling. */
+#define FM_FOCUS_SCROLL_DELAY_MS 600
+/* Approximate bytes that fit in the path label on a 320px display. */
+#define FM_PATH_LABEL_BYTES 36
 
 typedef struct {
   lv_obj_t *btn;
@@ -70,12 +74,17 @@ static bool s_open_err;
 static bool s_hold_armed;
 static uint32_t s_hold_dir;
 static uint32_t s_hold_next_ms;
+static bool s_focus_scroll_active;
+static uint32_t s_focus_scroll_due_ms;
 
 static void fm_prompt_delete(const char *fullpath);
 static void fm_show_context_menu(const char *fullpath);
 static void fm_track_mbox(lv_obj_t *mbox);
 static void fm_style_dialog_btn(lv_obj_t *btn);
 static void fm_apply_dialog_font(lv_obj_t *obj);
+static bool fm_path_exists(const char *path);
+static bool fm_remove_path(const char *path);
+static void fm_format_tail_path(char *out, size_t out_sz, const char *path);
 static const char *fm_entry_symbol(const char *name, bool is_dir);
 static void fm_virtual_sync_rows(void);
 static void fm_update_status_label(void);
@@ -164,13 +173,14 @@ static lv_obj_t *fm_dialog_add_body(lv_obj_t *content, const char *text) {
 
 static lv_obj_t *fm_dialog_add_list(lv_obj_t *content,
                                     const fm_dialog_item_t *items, size_t count,
-                                    lv_obj_t **out_first_btn) {
+                                    size_t focus_index,
+                                    lv_obj_t **out_focus_btn) {
   lv_obj_t *list = lv_list_create(content);
   lv_obj_set_width(list, lv_pct(100));
   lv_obj_set_height(list, LV_SIZE_CONTENT);
   ui_theme_style_list(list);
 
-  lv_obj_t *first = NULL;
+  lv_obj_t *focus_btn = NULL;
   for (size_t i = 0; i < count; i++) {
     lv_obj_t *btn =
         lv_list_add_btn(list, items[i].symbol, items[i].text);
@@ -178,12 +188,14 @@ static lv_obj_t *fm_dialog_add_list(lv_obj_t *content,
     lv_obj_add_event_cb(btn, fm_dialog_item_event_handler, LV_EVENT_KEY, NULL);
     if (items[i].on_click)
       lv_obj_add_event_cb(btn, items[i].on_click, LV_EVENT_CLICKED, NULL);
-    if (!first)
-      first = btn;
+    if (i == focus_index)
+      focus_btn = btn;
   }
 
-  if (out_first_btn)
-    *out_first_btn = first;
+  if (!focus_btn && lv_obj_get_child_cnt(list) > 0)
+    focus_btn = lv_obj_get_child(list, 0);
+  if (out_focus_btn)
+    *out_focus_btn = focus_btn;
   return list;
 }
 
@@ -254,6 +266,36 @@ const char *fm_get_cwd(void) { return fm_cwd; }
 const char *fm_base_name(const char *path) {
   const char *p = strrchr(path, '/');
   return p ? p + 1 : path;
+}
+
+static const char *fm_utf8_char_boundary(const char *p, const char *end) {
+  while (p < end && ((*p & 0xC0) == 0x80))
+    p++;
+  return p;
+}
+
+static void fm_format_tail_path(char *out, size_t out_sz, const char *path) {
+  if (!out || out_sz == 0)
+    return;
+  if (!path)
+    path = "";
+
+  size_t len = strlen(path);
+  if (len <= FM_PATH_LABEL_BYTES) {
+    strlcpy(out, path, out_sz);
+    return;
+  }
+
+  size_t tail_bytes = FM_PATH_LABEL_BYTES - 4; /* ".../" */
+  const char *tail = path + len - tail_bytes;
+  const char *slash = strchr(tail, '/');
+  if (slash && slash[1] != '\0')
+    tail = slash + 1;
+  else
+    tail = fm_utf8_char_boundary(tail, path + len);
+
+  strlcpy(out, ".../", out_sz);
+  strlcat(out, tail, out_sz);
 }
 
 bool fm_is_wav_filename(const char *name) {
@@ -340,15 +382,32 @@ static void fm_go_home(void) {
   ui_home_create();
 }
 
+static void fm_focus_scroll_reset(void) {
+  s_focus_scroll_active = false;
+  s_focus_scroll_due_ms = lv_tick_get() + FM_FOCUS_SCROLL_DELAY_MS;
+}
+
+static void fm_focus_scroll_tick(void) {
+  if (s_focus_scroll_active)
+    return;
+  if ((int32_t)(lv_tick_get() - s_focus_scroll_due_ms) < 0)
+    return;
+  s_focus_scroll_active = true;
+  fm_virtual_sync_rows();
+}
+
 static void fm_move_focus(int delta) {
   if (s_logical_count <= 0)
     return;
+  int old = s_focus_idx;
   int next = s_focus_idx + delta;
   if (next < 0)
     next = s_logical_count - 1;
   else if (next >= s_logical_count)
     next = 0;
   s_focus_idx = next;
+  if (s_focus_idx != old)
+    fm_focus_scroll_reset();
   fm_virtual_sync_rows();
 }
 
@@ -379,38 +438,31 @@ static void fm_remember_child_for_parent(void) {
   fm_restore_focus = true;
 }
 
-static lv_coord_t fm_font_line_h(lv_obj_t *lbl) {
-  const lv_font_t *f = lv_obj_get_style_text_font(lbl, LV_PART_MAIN);
-  if (!f)
-    f = ui_font_default();
-  return lv_font_get_line_height(f);
-}
-
 static void fm_vrow_apply_single_line(fm_vrow_t *row) {
-  lv_coord_t lh = fm_font_line_h(row->text_lbl);
   lv_obj_set_height(row->btn, FM_ROW_H);
   lv_obj_set_width(row->icon_lbl, LV_SIZE_CONTENT);
-  lv_obj_set_height(row->icon_lbl, lh);
-  lv_obj_remove_flag(row->icon_lbl, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+  lv_obj_set_style_text_font(row->icon_lbl, ui_font_builtin(), 0);
+  ui_theme_style_label_row(row->icon_lbl, FM_ROW_H);
   lv_obj_set_width(row->text_lbl, s_text_w);
-  lv_obj_set_height(row->text_lbl, lh);
-  lv_obj_set_style_text_line_space(row->text_lbl, 0, 0);
-  lv_obj_set_style_pad_all(row->text_lbl, 0, 0);
-  lv_obj_remove_flag(row->text_lbl, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+  ui_theme_style_label_row(row->text_lbl, FM_ROW_H);
 }
 
 static void fm_vrow_set_focus(fm_vrow_t *row, bool focused) {
-  lv_color_t col = focused ? ui_theme_color_accent() : ui_theme_color_text();
-  if (focused) {
-    lv_obj_add_state(row->btn, LV_STATE_FOCUSED);
+  lv_color_t bg = focused ? ui_theme_color_focus_bg() : ui_theme_color_panel();
+  lv_color_t fg = focused ? ui_theme_color_accent() : ui_theme_color_text();
+
+  lv_obj_remove_state(row->btn, LV_STATE_FOCUSED | LV_STATE_FOCUS_KEY);
+  lv_obj_set_style_bg_color(row->btn, bg, 0);
+  lv_obj_set_style_text_color(row->btn, fg, 0);
+  lv_obj_set_style_text_color(row->icon_lbl, fg, 0);
+  lv_obj_set_style_text_color(row->text_lbl, fg, 0);
+
+  if (focused && s_focus_scroll_active) {
     lv_label_set_long_mode(row->text_lbl, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
   } else {
-    lv_obj_remove_state(row->btn, LV_STATE_FOCUSED);
     lv_label_set_long_mode(row->text_lbl, LV_LABEL_LONG_MODE_DOTS);
   }
   fm_vrow_apply_single_line(row);
-  lv_obj_set_style_text_color(row->icon_lbl, col, 0);
-  lv_obj_set_style_text_color(row->text_lbl, col, 0);
 }
 
 static void fm_virtual_sync_rows(void) {
@@ -462,7 +514,7 @@ static void fm_create_vrow(fm_vrow_t *row, lv_obj_t *parent) {
   lv_group_remove_obj(row->btn);
   lv_obj_set_width(row->btn, LV_PCT(100));
   lv_obj_set_height(row->btn, FM_ROW_H);
-  lv_obj_add_flag(row->btn, LV_OBJ_FLAG_STATE_TRICKLE);
+  lv_obj_remove_flag(row->btn, LV_OBJ_FLAG_STATE_TRICKLE);
   lv_obj_remove_flag(row->btn, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_remove_flag(row->btn, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_set_flex_flow(row->btn, LV_FLEX_FLOW_ROW);
@@ -480,8 +532,7 @@ static void fm_create_vrow(fm_vrow_t *row, lv_obj_t *parent) {
   row->text_lbl = lv_label_create(row->btn);
   lv_label_set_long_mode(row->text_lbl, LV_LABEL_LONG_MODE_DOTS);
   fm_vrow_apply_single_line(row);
-  lv_obj_set_style_text_color(row->icon_lbl, ui_theme_color_text(), 0);
-  lv_obj_set_style_text_color(row->text_lbl, ui_theme_color_text(), 0);
+  fm_vrow_set_focus(row, false);
 }
 
 static void fm_format_size(char *buf, size_t buf_sz, unsigned long bytes) {
@@ -582,7 +633,7 @@ static void fm_style_dialog_btn(lv_obj_t *btn) {
 }
 
 static void fm_apply_dialog_font(lv_obj_t *obj) {
-  const lv_font_t *font = ui_font_builtin();
+  const lv_font_t *font = ui_font_default();
 
   if (lv_obj_check_type(obj, &lv_label_class) ||
       lv_obj_check_type(obj, &lv_list_button_class) ||
@@ -598,6 +649,90 @@ static void fm_track_mbox(lv_obj_t *mbox) {
   ui_theme_apply_msgbox(mbox);
   fm_apply_dialog_font(mbox);
   lv_obj_add_event_cb(mbox, fm_mbox_closed_cb, LV_EVENT_DELETE, NULL);
+}
+
+static bool fm_path_exists(const char *path) {
+#ifdef TARGET_SIM
+  unsigned long winerr = 0;
+  if (!sim_path_get_info_utf8(path, NULL, NULL, NULL, &winerr)) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "path info failed for %s (winerr=%lu)",
+                 path, winerr);
+    return false;
+  }
+  return true;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "stat failed for %s", path);
+    return false;
+  }
+  return true;
+#endif
+}
+
+static bool fm_remove_path(const char *path) {
+  if (!path || path[0] == '\0' || strcmp(path, fm_root()) == 0 ||
+      !fm_has_root_prefix(path))
+    return false;
+
+#ifdef TARGET_SIM
+  unsigned long winerr = 0;
+  if (!sim_delete_utf8(path, &winerr)) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "delete failed: %s (winerr=%lu)",
+                 path, winerr);
+    return false;
+  }
+  return true;
+#else
+  struct stat st;
+  if (stat(path, &st) != 0) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "stat failed before delete: %s", path);
+    return false;
+  }
+
+  if (!S_ISDIR(st.st_mode)) {
+    if (unlink(path) != 0) {
+      platform_log(PLATFORM_LOG_WARN, TAG, "unlink failed: %s", path);
+      return false;
+    }
+    return true;
+  }
+
+  DIR *dir = opendir(path);
+  if (!dir) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "opendir failed before delete: %s",
+                 path);
+    return false;
+  }
+
+  bool ok = true;
+  struct dirent *de;
+  while ((de = readdir(dir)) != NULL) {
+    if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+      continue;
+
+    char child[FM_PATH_MAX];
+    strlcpy(child, path, sizeof(child));
+    strlcat(child, "/", sizeof(child));
+    if (strlcat(child, de->d_name, sizeof(child)) >= sizeof(child)) {
+      ok = false;
+      break;
+    }
+    if (!fm_remove_path(child)) {
+      ok = false;
+      break;
+    }
+  }
+  closedir(dir);
+
+  if (!ok)
+    return false;
+  if (rmdir(path) != 0) {
+    platform_log(PLATFORM_LOG_WARN, TAG, "rmdir failed: %s", path);
+    return false;
+  }
+  return true;
+#endif
 }
 
 static void fm_dialog_close_cb(lv_event_t *e) {
@@ -630,7 +765,7 @@ static void fm_show_context_menu(const char *fullpath) {
   };
 
   lv_obj_t *focus_btn = NULL;
-  fm_dialog_add_list(lv_msgbox_get_content(mbox), items, 2, &focus_btn);
+  fm_dialog_add_list(lv_msgbox_get_content(mbox), items, 2, 1, &focus_btn);
   fm_dialog_show(mbox, focus_btn);
 }
 
@@ -638,15 +773,7 @@ static void fm_delete_cancel_cb(lv_event_t *e) { fm_dialog_close_cb(e); }
 
 static void fm_delete_confirm_cb(lv_event_t *e) {
   (void)e;
-#ifdef TARGET_SIM
-  unsigned long winerr = 0;
-  if (!sim_delete_utf8(fm_delete_path, &winerr)) {
-    platform_log(PLATFORM_LOG_WARN, TAG, "delete failed: %s (winerr=%lu)",
-                 fm_delete_path, winerr);
-  }
-#else
-  unlink(fm_delete_path);
-#endif
+  fm_remove_path(fm_delete_path);
   if (fm_open_mbox)
     lv_msgbox_close(fm_open_mbox);
 }
@@ -655,7 +782,7 @@ static void fm_prompt_delete(const char *fullpath) {
   strlcpy(fm_delete_path, fullpath, sizeof(fm_delete_path));
 
   lv_obj_t *mbox = lv_msgbox_create(NULL);
-  lv_msgbox_add_title(mbox, LV_SYMBOL_TRASH " Delete");
+  lv_msgbox_add_title(mbox, "Confirm Delete");
   fm_dialog_add_body(lv_msgbox_get_content(mbox), fm_base_name(fullpath));
 
   static const fm_dialog_item_t items[] = {
@@ -664,7 +791,7 @@ static void fm_prompt_delete(const char *fullpath) {
   };
 
   lv_obj_t *focus_btn = NULL;
-  fm_dialog_add_list(lv_msgbox_get_content(mbox), items, 2, &focus_btn);
+  fm_dialog_add_list(lv_msgbox_get_content(mbox), items, 2, 1, &focus_btn);
   fm_dialog_show(mbox, focus_btn);
 }
 
@@ -799,6 +926,7 @@ void fm_on_nav_hold_tick(bool up, bool down, bool left, bool right) {
   int held_count = (up ? 1 : 0) + (down ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
   if (held_count != 1) {
     fm_hold_reset();
+    fm_focus_scroll_tick();
     return;
   }
 
@@ -848,8 +976,7 @@ void fm_handle_menu_on_focus(void) {
   if (!fm_build_path(full, sizeof(full), name))
     return;
 
-  struct stat st;
-  if (stat(full, &st) != 0)
+  if (!fm_path_exists(full))
     return;
 
   fm_show_context_menu(full);
@@ -937,10 +1064,11 @@ void fm_create(void) {
   s_chrome = ui_chrome_create(g_ui.screen, "File Manager");
 
   lv_obj_t *path_label = lv_label_create(g_ui.screen);
-  lv_label_set_long_mode(path_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-  lv_obj_set_width(path_label, panel_w);
-  lv_label_set_text(path_label, fm_cwd);
+  char path_display[FM_PATH_MAX];
+  fm_format_tail_path(path_display, sizeof(path_display), fm_cwd);
+  lv_label_set_text(path_label, path_display);
   ui_theme_style_label_secondary(path_label);
+  ui_theme_style_label_truncated(path_label, panel_w);
   lv_obj_align(path_label, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top());
 
   s_list_panel = lv_obj_create(g_ui.screen);
@@ -1021,6 +1149,7 @@ void fm_create(void) {
     s_focus_idx = (s_logical_count > 1) ? 1 : 0;
   }
   s_window_start = 0;   /* fm_virtual_sync_rows centres it */
+  fm_focus_scroll_reset();
 
   fm_status_pos_label = lv_label_create(g_ui.screen);
   ui_theme_style_label_secondary(fm_status_pos_label);

@@ -48,7 +48,7 @@ cd d:\Projects\dev-hardware\esplay-neo-firmware\launcher\sim
 - M：Menu
 - S：Start
 - Esc：Select
-- Q / W：L / R（目前保留映射，Phase 1 未使用）
+- Q / W：L / R
 
 页面行为：
 

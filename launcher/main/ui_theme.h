@@ -4,7 +4,7 @@
 #include "lvgl.h"
 #include <stdbool.h>
 
-#define UI_THEME_COUNT 10
+#define UI_THEME_COUNT 16
 
 typedef enum {
   UI_THEME_DARK = 0,
@@ -28,6 +28,8 @@ void ui_theme_apply_screen(lv_obj_t *screen);
 void ui_theme_style_label_primary(lv_obj_t *label);
 void ui_theme_style_label_secondary(lv_obj_t *label);
 void ui_theme_style_label_accent(lv_obj_t *label);
+void ui_theme_style_label_truncated(lv_obj_t *label, lv_coord_t width);
+void ui_theme_style_label_row(lv_obj_t *label, lv_coord_t row_h);
 void ui_theme_style_btn(lv_obj_t *btn);
 void ui_theme_style_list(lv_obj_t *list);
 void ui_theme_style_list_btn(lv_obj_t *btn);
@@ -41,5 +43,6 @@ lv_color_t ui_theme_color_accent(void);
 lv_color_t ui_theme_color_text(void);
 lv_color_t ui_theme_color_text_dim(void);
 lv_color_t ui_theme_color_panel(void);
+lv_color_t ui_theme_color_focus_bg(void);
 
 #endif

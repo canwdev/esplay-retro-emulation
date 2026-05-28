@@ -9,6 +9,7 @@
 #include "ui_app.h"
 #include "ui_backlight.h"
 #include "ui_chrome.h"
+#include "ui_font.h"
 #include "ui_home.h"
 #include "ui_screen_test.h"
 #include "ui_theme.h"
@@ -38,6 +39,7 @@ static const int32_t s_timeout_options[] = {0, 5, 10, 30, 60};
 static const int s_timeout_options_count = sizeof(s_timeout_options) / sizeof(s_timeout_options[0]);
 
 static lv_obj_t *s_row_btns[ROW_COUNT];
+static lv_obj_t *s_row_labels[ROW_COUNT];
 static lv_obj_t *s_scroll;
 static settings_row_t s_focus_row = ROW_BRIGHTNESS;
 static lv_coord_t s_scroll_y = 0;
@@ -67,56 +69,130 @@ static void settings_save_theme(void) {
 }
 
 static void settings_update_row_labels(void) {
-  if (!s_row_btns[ROW_BRIGHTNESS])
+  if (!s_row_labels[ROW_BRIGHTNESS])
     return;
 
-  if (s_row_btns[ROW_BRIGHTNESS]) {
-    lv_obj_t *lbl = lv_obj_get_child(s_row_btns[ROW_BRIGHTNESS], 0);
-    if (lbl)
-      lv_label_set_text_fmt(lbl, LV_SYMBOL_IMAGE " Brightness: %ld%%",
-                            (long)s_brightness);
-  }
-  if (s_row_btns[ROW_VOLUME]) {
-    lv_obj_t *lbl = lv_obj_get_child(s_row_btns[ROW_VOLUME], 0);
-    if (lbl)
-      lv_label_set_text_fmt(lbl, LV_SYMBOL_VOLUME_MAX " Volume: %ld%%",
-                            (long)s_volume);
-  }
-  if (s_row_btns[ROW_THEME]) {
-    lv_obj_t *lbl = lv_obj_get_child(s_row_btns[ROW_THEME], 0);
-    if (lbl)
-      lv_label_set_text_fmt(lbl, LV_SYMBOL_TINT " Theme: %s",
-                            ui_theme_name((int)s_theme));
-  }
-  if (s_row_btns[ROW_BACKLIGHT_TIMEOUT]) {
-    lv_obj_t *lbl = lv_obj_get_child(s_row_btns[ROW_BACKLIGHT_TIMEOUT], 0);
-    if (lbl) {
-      if (s_backlight_timeout == 0)
-        lv_label_set_text(lbl, LV_SYMBOL_EYE_OPEN " Screen Off: Never");
-      else
-        lv_label_set_text_fmt(lbl, LV_SYMBOL_EYE_OPEN " Screen Off: %lds",
-                              (long)s_backlight_timeout);
-    }
+  if (s_row_labels[ROW_BRIGHTNESS])
+    lv_label_set_text_fmt(s_row_labels[ROW_BRIGHTNESS], "Brightness: %ld%%",
+                          (long)s_brightness);
+  if (s_row_labels[ROW_VOLUME])
+    lv_label_set_text_fmt(s_row_labels[ROW_VOLUME], "Volume: %ld%%",
+                          (long)s_volume);
+  if (s_row_labels[ROW_THEME])
+    lv_label_set_text_fmt(s_row_labels[ROW_THEME], "Theme: %s",
+                          ui_theme_name((int)s_theme));
+  if (s_row_labels[ROW_BACKLIGHT_TIMEOUT]) {
+    if (s_backlight_timeout == 0)
+      lv_label_set_text(s_row_labels[ROW_BACKLIGHT_TIMEOUT],
+                        "Screen Off: Never");
+    else
+      lv_label_set_text_fmt(s_row_labels[ROW_BACKLIGHT_TIMEOUT],
+                            "Screen Off: %lds",
+                            (long)s_backlight_timeout);
   }
 }
 
-static lv_obj_t *settings_add_row(lv_obj_t *parent, const char *text) {
+#define SETTINGS_ROW_H 24
+#define SETTINGS_ICON_W 20
+
+static void settings_row_apply_focus(lv_obj_t *btn, bool focused) {
+  if (!btn)
+    return;
+
+  lv_color_t bg = focused ? ui_theme_color_focus_bg() : ui_theme_color_panel();
+  lv_color_t fg = focused ? ui_theme_color_accent() : ui_theme_color_text();
+  lv_obj_set_style_bg_color(btn, bg, 0);
+  lv_obj_set_style_text_color(btn, fg, 0);
+
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(btn); i++) {
+    lv_obj_t *child = lv_obj_get_child(btn, i);
+    if (lv_obj_check_type(child, &lv_label_class))
+      lv_obj_set_style_text_color(child, fg, 0);
+  }
+}
+
+static void settings_info_apply_focus(lv_obj_t *box, bool focused) {
+  if (!box)
+    return;
+
+  lv_color_t bg = focused ? ui_theme_color_focus_bg() : ui_theme_color_panel();
+  lv_color_t title = focused ? ui_theme_color_accent() : ui_theme_color_accent();
+  lv_color_t body = focused ? ui_theme_color_accent() : ui_theme_color_text();
+
+  lv_obj_set_style_bg_color(box, bg, 0);
+  lv_obj_set_style_border_width(box, 0, 0);
+  lv_obj_set_style_outline_width(box, 0, 0);
+
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(box); i++) {
+    lv_obj_t *child = lv_obj_get_child(box, i);
+    if (!lv_obj_check_type(child, &lv_label_class))
+      continue;
+    lv_obj_set_style_text_color(child, i == 0 ? title : body, 0);
+  }
+}
+
+static lv_obj_t *settings_add_row(lv_obj_t *parent, settings_row_t row,
+                                  const char *symbol, const char *text) {
   lv_obj_t *btn = lv_btn_create(parent);
+  lv_obj_remove_style_all(btn);
   lv_obj_set_width(btn, LV_PCT(100));
-  lv_obj_set_height(btn, 28);
+  lv_obj_set_height(btn, SETTINGS_ROW_H);
   lv_obj_add_flag(btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+  lv_obj_remove_flag(btn, LV_OBJ_FLAG_STATE_TRICKLE);
+  lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(btn, 0, 0);
+  lv_obj_set_style_shadow_width(btn, 0, 0);
+  lv_obj_set_style_outline_width(btn, 0, 0);
+  lv_obj_set_style_radius(btn, 0, 0);
+  lv_obj_set_style_pad_top(btn, 0, 0);
+  lv_obj_set_style_pad_bottom(btn, 0, 0);
+  lv_obj_set_style_pad_left(btn, 6, 0);
+  lv_obj_set_style_pad_right(btn, 6, 0);
+  lv_obj_set_style_pad_column(btn, 4, 0);
+  lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *icon = lv_label_create(btn);
+  lv_obj_remove_style_all(icon);
+  lv_label_set_text(icon, symbol ? symbol : "");
+  lv_obj_set_style_text_font(icon, ui_font_builtin(), 0);
+  lv_obj_set_width(icon, SETTINGS_ICON_W);
+  ui_theme_style_label_row(icon, SETTINGS_ROW_H);
+  lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
 
   lv_obj_t *lbl = lv_label_create(btn);
+  lv_obj_remove_style_all(lbl);
   lv_label_set_text(lbl, text);
-  ui_theme_style_label_primary(lbl);
-  lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
-  ui_theme_style_list_btn(btn);
+  lv_obj_set_style_text_font(lbl, ui_font_default(), 0);
+  lv_obj_set_flex_grow(lbl, 1);
+  lv_obj_set_width(lbl, 0);
+  ui_theme_style_label_row(lbl, SETTINGS_ROW_H);
+  lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
+
+  settings_row_apply_focus(btn, false);
+  s_row_labels[row] = lbl;
   return btn;
 }
 
 static void settings_row_event_handler(lv_event_t *e) {
   lv_event_code_t code = lv_event_get_code(e);
   lv_obj_t *obj = lv_event_get_target(e);
+
+  if (code == LV_EVENT_FOCUSED) {
+    if (lv_obj_check_type(obj, &lv_button_class))
+      settings_row_apply_focus(obj, true);
+    else
+      settings_info_apply_focus(obj, true);
+    return;
+  }
+  if (code == LV_EVENT_DEFOCUSED) {
+    if (lv_obj_check_type(obj, &lv_button_class))
+      settings_row_apply_focus(obj, false);
+    else
+      settings_info_apply_focus(obj, false);
+    return;
+  }
 
   if (code == LV_EVENT_KEY) {
     uint32_t key = lv_indev_get_key(lv_indev_get_act());
@@ -196,17 +272,19 @@ static void settings_add_info_block(lv_obj_t *parent, const char *title,
                                     const char *body) {
   lv_obj_t *box = lv_obj_create(parent);
   lv_obj_remove_style_all(box);
-  ui_theme_style_panel(box);
   lv_obj_set_width(box, LV_PCT(100));
   lv_obj_set_height(box, LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+  lv_obj_set_style_shadow_width(box, 0, 0);
+  lv_obj_set_style_radius(box, 0, 0);
+  lv_obj_set_style_border_width(box, 0, 0);
+  lv_obj_set_style_outline_width(box, 0, 0);
   lv_obj_set_style_pad_all(box, 8, 0);
   lv_obj_set_style_pad_row(box, 4, 0);
   lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_flag(box, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
-  lv_obj_set_style_border_color(box, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_FOCUSED);
-  lv_obj_set_style_border_width(box, 2, LV_STATE_FOCUSED);
-  lv_obj_set_style_border_side(box, LV_BORDER_SIDE_FULL, LV_STATE_FOCUSED);
+  settings_info_apply_focus(box, false);
 
   if (g_ui.input_group) {
     lv_group_add_obj(g_ui.input_group, box);
@@ -240,6 +318,7 @@ void ui_settings_sync_volume(uint8_t volume) {
 
 void ui_settings_detach_ui(void) {
   memset(s_row_btns, 0, sizeof(s_row_btns));
+  memset(s_row_labels, 0, sizeof(s_row_labels));
   s_scroll = NULL;
 }
 
@@ -305,51 +384,56 @@ void ui_settings_create(void) {
   lv_obj_remove_style_all(scroll);
   lv_obj_set_size(scroll, 310, 186);
   lv_obj_align(scroll, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 1);
-  lv_obj_set_style_pad_bottom(scroll, 20, 0);
+  lv_obj_set_style_pad_bottom(scroll, 16, 0);
   lv_obj_set_style_bg_opa(scroll, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(scroll, 0, 0);
   lv_obj_set_flex_flow(scroll, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_row(scroll, 6, 0);
+  lv_obj_set_style_pad_row(scroll, 2, 0);
   lv_obj_set_scrollbar_mode(scroll, LV_SCROLLBAR_MODE_AUTO);
   lv_obj_add_flag(scroll, LV_OBJ_FLAG_SCROLLABLE);
   ui_theme_style_scroll(scroll);
 
-  s_row_btns[ROW_BACK] = settings_add_row(scroll, LV_SYMBOL_LEFT " Back");
+  s_row_btns[ROW_BACK] = settings_add_row(scroll, ROW_BACK, LV_SYMBOL_LEFT,
+                                          "Back");
   lv_obj_add_event_cb(s_row_btns[ROW_BACK], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_BACK]);
 
   s_row_btns[ROW_BRIGHTNESS] =
-      settings_add_row(scroll, LV_SYMBOL_IMAGE " Brightness");
+      settings_add_row(scroll, ROW_BRIGHTNESS, LV_SYMBOL_IMAGE,
+                       "Brightness");
   lv_obj_add_event_cb(s_row_btns[ROW_BRIGHTNESS], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_BRIGHTNESS]);
 
   s_row_btns[ROW_VOLUME] =
-      settings_add_row(scroll, LV_SYMBOL_VOLUME_MAX " Volume");
+      settings_add_row(scroll, ROW_VOLUME, LV_SYMBOL_VOLUME_MAX, "Volume");
   lv_obj_add_event_cb(s_row_btns[ROW_VOLUME], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_VOLUME]);
 
-  s_row_btns[ROW_THEME] = settings_add_row(scroll, LV_SYMBOL_TINT " Theme");
+  s_row_btns[ROW_THEME] =
+      settings_add_row(scroll, ROW_THEME, LV_SYMBOL_TINT, "Theme");
   lv_obj_add_event_cb(s_row_btns[ROW_THEME], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_THEME]);
 
   s_row_btns[ROW_BACKLIGHT_TIMEOUT] =
-      settings_add_row(scroll, LV_SYMBOL_EYE_OPEN " Screen Off");
+      settings_add_row(scroll, ROW_BACKLIGHT_TIMEOUT, LV_SYMBOL_EYE_OPEN,
+                       "Screen Off");
   lv_obj_add_event_cb(s_row_btns[ROW_BACKLIGHT_TIMEOUT],
                       settings_row_event_handler, LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_BACKLIGHT_TIMEOUT]);
 
   s_row_btns[ROW_RESTART] =
-      settings_add_row(scroll, LV_SYMBOL_REFRESH " Reboot");
+      settings_add_row(scroll, ROW_RESTART, LV_SYMBOL_REFRESH, "Reboot");
   lv_obj_add_event_cb(s_row_btns[ROW_RESTART], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_RESTART]);
 
   s_row_btns[ROW_SCREEN_TEST] =
-      settings_add_row(scroll, LV_SYMBOL_IMAGE " Screen Test");
+      settings_add_row(scroll, ROW_SCREEN_TEST, LV_SYMBOL_IMAGE,
+                       "Screen Test");
   lv_obj_add_event_cb(s_row_btns[ROW_SCREEN_TEST], settings_row_event_handler,
                       LV_EVENT_ALL, NULL);
   lv_group_add_obj(g_ui.input_group, s_row_btns[ROW_SCREEN_TEST]);
