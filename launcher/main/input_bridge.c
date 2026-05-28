@@ -12,6 +12,7 @@ static input_gamepad_state s_last;
 static bool s_last_valid;
 static lv_timer_t *s_poll_timer;
 static bool s_block_enter_until_a_release;
+static bool s_swallow_until_all_released;
 
 void input_bridge_block_enter_until_release(void) {
   s_block_enter_until_a_release = true;
@@ -22,16 +23,12 @@ static bool input_edge(const input_gamepad_state *cur, int idx) {
          (!s_last_valid || s_last.values[idx] == 0);
 }
 
-/** Swallow wake-up key only in file manager (incl. preview). */
-static bool input_backlight_swallow_wake(void) {
-  if (preview_is_active())
-    return true;
-  return g_ui.current_page == PAGE_FILES;
-}
-
-static bool input_lvgl_allowed_while_backlight_off(void) {
-  return g_ui.current_page == PAGE_HOME ||
-         g_ui.current_page == PAGE_SETTINGS;
+static bool input_any_pressed(const input_gamepad_state *gp) {
+  for (int i = 0; i < GAMEPAD_INPUT_MAX; i++) {
+    if (gp->values[i] == 1)
+      return true;
+  }
+  return false;
 }
 
 static void input_poll_timer_cb(lv_timer_t *t) {
@@ -40,13 +37,7 @@ static void input_poll_timer_cb(lv_timer_t *t) {
   hal_input_poll();
   hal_input_read(&gp);
 
-  bool any_pressed = false;
-  for (int i = 0; i < GAMEPAD_INPUT_MAX; i++) {
-    if (gp.values[i] == 1) {
-      any_pressed = true;
-      break;
-    }
-  }
+  bool any_pressed = input_any_pressed(&gp);
 
   /* Handle global backlight logic. */
   bool any_edge = false;
@@ -59,12 +50,11 @@ static void input_poll_timer_cb(lv_timer_t *t) {
 
   if (any_edge && !ui_backlight_is_on()) {
     ui_backlight_set_on(true);
-    if (input_backlight_swallow_wake()) {
-      /* File manager: swallow the wake-up key press. */
-      s_last = gp;
-      s_last_valid = true;
-      return;
-    }
+    s_swallow_until_all_released = true;
+    /* Swallow the wake-up key press. */
+    s_last = gp;
+    s_last_valid = true;
+    return;
   }
 
   if (any_pressed) {
@@ -126,13 +116,14 @@ static void input_poll_timer_cb(lv_timer_t *t) {
 
 void input_bridge_init(void) {
   s_last_valid = false;
+  s_swallow_until_all_released = false;
   s_poll_timer = lv_timer_create(input_poll_timer_cb, 20, NULL);
   lv_timer_set_repeat_count(s_poll_timer, -1);
 }
 
 void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {
   (void)indev;
-  if (!ui_backlight_is_on() && !input_lvgl_allowed_while_backlight_off()) {
+  if (!ui_backlight_is_on()) {
     data->state = LV_INDEV_STATE_RELEASED;
     return;
   }
@@ -141,19 +132,13 @@ void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {
   hal_input_poll();
   hal_input_read(&gamepad_state);
 
-  if (!ui_backlight_is_on()) {
-    bool any_pressed = false;
-    for (int i = 0; i < GAMEPAD_INPUT_MAX; i++) {
-      if (gamepad_state.values[i] == 1) {
-        any_pressed = true;
-        break;
-      }
-    }
-    if (any_pressed)
-      ui_backlight_set_on(true);
-  }
-
   data->state = LV_INDEV_STATE_RELEASED;
+
+  if (s_swallow_until_all_released) {
+    if (!input_any_pressed(&gamepad_state))
+      s_swallow_until_all_released = false;
+    return;
+  }
 
   if (s_block_enter_until_a_release) {
     if (gamepad_state.values[GAMEPAD_INPUT_A] == 0)

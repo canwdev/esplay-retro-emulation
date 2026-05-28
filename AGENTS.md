@@ -40,7 +40,7 @@ port/sim/      SDL2 + POSIX/Win32 stub（PC Simulator）
 - **主页**：Files（SD `/sd`）/ Settings。
 - **文件管理器**（`file_manager.c`）：虚拟滚动、删除；WAV/MP3/文本预览（`preview/`）；`FM_MAX_ENTRIES` / `AUDIO_PLAYLIST_MAX` = **512**；预览前释放 `s_entries` 腾堆。
 - **Settings**（`ui_settings.c`）：亮度、音量、**16** 套主题（`UI_THEME_COUNT`）、熄屏、重启、LCD 测试；Storage / Battery / About。
-- **背光**（`ui_backlight.c`）：超时熄屏；**文件管理器/预览**唤醒时吞首击；**首页/设置**唤醒并执行按键。
+- **背光**（`ui_backlight.c`）：超时熄屏，任意键唤醒并吞首击。
 - **音频（ESP32）**：I2S GPIO 见 `sdkconfig.defaults` / menuconfig **Audio I2S speaker**；播放中主循环节流 LVGL ~25 fps（`launcher_main.c`）。
 
 ## 分区表（`launcher/partitions.csv`）
