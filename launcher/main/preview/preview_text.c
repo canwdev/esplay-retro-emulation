@@ -24,7 +24,7 @@
 static const char *TAG = "preview_text";
 
 #define TEXT_DETECT_SAMPLE     4096
-#define TEXT_DECODE_WINDOW     16384
+#define TEXT_DECODE_WINDOW     8192
 #define TEXT_LINE_SPACE        4
 #define TEXT_LETTER_SPACE      1
 #define TEXT_PAGE_HOLD_MS_INITIAL 400
@@ -299,7 +299,7 @@ static text_encoding_t text_detect_encoding_sample(const uint8_t *s, size_t len,
 
 typedef struct {
   char *text;
-  uint32_t *file_after;
+  uint16_t *raw_after;
   size_t len;
   bool eof;
 } text_chunk_t;
@@ -308,32 +308,26 @@ static void text_chunk_free(text_chunk_t *chunk) {
   if (!chunk)
     return;
   pfree(chunk->text);
-  pfree(chunk->file_after);
+  pfree(chunk->raw_after);
   memset(chunk, 0, sizeof(*chunk));
-}
-
-static bool text_chunk_reserve(char **text, uint32_t **map, size_t cap) {
-  *text = pmalloc(cap + 1);
-  *map = pmalloc((cap + 1) * sizeof(uint32_t));
-  if (!*text || !*map) {
-    pfree(*text);
-    pfree(*map);
-    *text = NULL;
-    *map = NULL;
-    return false;
-  }
-  return true;
 }
 
 static bool text_decode_raw(text_encoding_t enc, const uint8_t *raw,
                             size_t raw_len, size_t file_start,
                             text_chunk_t *out) {
   size_t cap = (enc == TEXT_ENC_GB2312) ? (raw_len * 3 + 1) : (raw_len + 1);
-  if (!text_chunk_reserve(&out->text, &out->file_after, cap))
+  out->text = pmalloc(cap + 1);
+  out->raw_after = pmalloc((cap + 1) * sizeof(uint16_t));
+  if (!out->text || !out->raw_after) {
+    pfree(out->text);
+    pfree(out->raw_after);
+    out->text = NULL;
+    out->raw_after = NULL;
     return false;
+  }
 
   size_t o = 0;
-  out->file_after[0] = (uint32_t)file_start;
+  out->raw_after[0] = 0;
 
   for (size_t i = 0; i < raw_len;) {
     uint32_t cp = 0;
@@ -367,7 +361,7 @@ static bool text_decode_raw(text_encoding_t enc, const uint8_t *raw,
 
     for (size_t j = 0; j < enc_len; j++) {
       out->text[o++] = enc_buf[j];
-      out->file_after[o] = (uint32_t)(file_start + i + src_adv);
+      out->raw_after[o] = (uint16_t)(i + src_adv);
     }
     i += src_adv;
   }
@@ -486,10 +480,13 @@ static bool text_next_page_offset(const text_doc_t *doc, size_t start,
     pos += adv > 0 ? adv : 1;
   }
 
+  uint16_t raw_adv = 0;
   if (pos >= chunk.len && !chunk.eof)
-    *out_next = chunk.file_after[chunk.len];
+    raw_adv = chunk.raw_after[chunk.len];
   else
-    *out_next = chunk.file_after[pos < chunk.len ? pos : chunk.len];
+    raw_adv = chunk.raw_after[pos < chunk.len ? pos : chunk.len];
+
+  *out_next = start + (size_t)raw_adv;
 
   if (*out_next <= start)
     *out_next = start + 1;

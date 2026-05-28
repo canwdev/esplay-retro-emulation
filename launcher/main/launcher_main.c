@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gamepad.h"
+#include "hal_audio.h"
 #include "hal_storage.h"
 #include "input_bridge.h"
 #include "lcd.h"
@@ -72,7 +73,7 @@ static void init_system_components(void) {
   ESP_LOGI(TAG, "Initializing gamepad");
   gamepad_init();
 
-  audio_init();
+  hal_audio_init();
 }
 
 static void init_lvgl_display(void) {
