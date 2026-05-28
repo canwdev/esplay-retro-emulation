@@ -51,3 +51,9 @@ void preview_on_timer(void) {
   if (s_active && s_active->on_timer)
     s_active->on_timer();
 }
+
+const char *preview_current_path(void) {
+  if (!s_active || !s_active->current_path)
+    return NULL;
+  return s_active->current_path();
+}

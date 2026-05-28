@@ -36,6 +36,7 @@ typedef struct {
 
 typedef struct {
   char path[FM_PATH_MAX];
+  char cwd[FM_PATH_MAX];
   bmp_meta_t meta;
   FILE *file;
   uint8_t *row_buf;
@@ -50,6 +51,10 @@ typedef struct {
   lv_coord_t canvas_h;
   uint32_t canvas_scale;
   int32_t cached_row;
+  char *shared_names;
+  int shared_count;
+  int shared_index;
+  int shared_name_stride;
 } bmp_state_t;
 
 static bmp_state_t s_state;
@@ -61,6 +66,9 @@ static bool s_active;
 
 static uint32_t bmp_zoom_next(uint32_t scale, bool zoom_in);
 static void preview_bmp_close(void);
+static bool bmp_open_document(const char *path);
+static bool bmp_apply_path(const char *path, bool preserve_mode);
+static const char *preview_bmp_current_path(void);
 
 static uint16_t bmp_u16(const uint8_t *p) {
   return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
@@ -280,6 +288,14 @@ static void bmp_release_doc(void) {
   }
   platform_free(s_state.row_buf);
   s_state.row_buf = NULL;
+}
+
+static void bmp_release_shared_list(void) {
+  platform_free(s_state.shared_names);
+  s_state.shared_names = NULL;
+  s_state.shared_count = 0;
+  s_state.shared_index = -1;
+  s_state.shared_name_stride = 0;
 }
 
 static void bmp_release_canvas(void) {
@@ -550,13 +566,11 @@ static bool preview_bmp_can_open(const char *path) {
   return dot && strcasecmp(dot, ".bmp") == 0;
 }
 
-static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
-  lv_coord_t top = ui_chrome_body_top() + 2;
-  lv_coord_t bottom_reserved = 20;
-  lv_coord_t viewport_w = HAL_DISPLAY_WIDTH - 12;
-  lv_coord_t viewport_h = HAL_DISPLAY_HEIGHT - top - bottom_reserved;
-  bmp_meta_t meta;
+static bool bmp_open_document(const char *path) {
   FILE *file;
+  bmp_meta_t meta;
+  uint8_t *row_buf;
+  uint32_t fit_scale;
 
   file = bmp_fopen_native(path, "rb");
   if (!file)
@@ -566,33 +580,37 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
     return false;
   }
 
-  memset(&s_state, 0, sizeof(s_state));
-  s_state.file = file;
-  s_state.row_buf = (uint8_t *)platform_malloc(meta.row_size_bytes);
-  if (!s_state.row_buf) {
+  row_buf = (uint8_t *)platform_malloc(meta.row_size_bytes);
+  if (!row_buf) {
     platform_log(PLATFORM_LOG_ERROR, TAG, "alloc failed row=%lu",
                  (unsigned long)meta.row_size_bytes);
-    bmp_release_doc();
+    fclose(file);
     return false;
   }
 
-  strncpy(s_state.path, path, sizeof(s_state.path) - 1);
-  s_state.path[sizeof(s_state.path) - 1] = '\0';
-  s_state.meta = meta;
-  s_state.viewport_w = viewport_w;
-  s_state.viewport_h = viewport_h;
-  s_state.fit_scale = bmp_scale_fit_budget(
-      bmp_fit_scale(&meta, viewport_w, viewport_h));
-  if (s_state.fit_scale == 0) {
+  fit_scale = bmp_scale_fit_budget(
+      bmp_fit_scale(&meta, s_state.viewport_w, s_state.viewport_h));
+  if (fit_scale == 0) {
     platform_log(PLATFORM_LOG_ERROR, TAG,
                  "no bmp scale fits memory w=%d h=%d largest=%lu free=%lu",
                  meta.width, meta.height,
                  (unsigned long)platform_largest_free_block(),
                  (unsigned long)platform_free_heap());
-    bmp_release_doc();
+    platform_free(row_buf);
+    fclose(file);
     return false;
   }
+
+  bmp_release_canvas();
+  bmp_release_doc();
+
+  s_state.file = file;
+  s_state.row_buf = row_buf;
+  s_state.meta = meta;
+  s_state.fit_scale = fit_scale;
   s_state.cached_row = -1;
+  strncpy(s_state.path, path, sizeof(s_state.path) - 1);
+  s_state.path[sizeof(s_state.path) - 1] = '\0';
 
   platform_log(PLATFORM_LOG_INFO, TAG, "Opening bmp preview: %s", path);
   platform_log(PLATFORM_LOG_INFO, TAG,
@@ -600,6 +618,83 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
                meta.width, meta.height, (unsigned)meta.bpp,
                (unsigned)s_state.fit_scale, (unsigned long)meta.data_offset,
                (unsigned long)meta.row_size_bytes, (unsigned long)meta.file_size);
+  return true;
+}
+
+static bool bmp_apply_path(const char *path, bool preserve_mode) {
+  bool was_fit = bmp_is_fit_view();
+  if (!bmp_open_document(path))
+    return false;
+
+  if (s_chrome.title_label)
+    lv_label_set_text(s_chrome.title_label, fm_base_name(path));
+
+  if (preserve_mode && !was_fit) {
+    if (!bmp_reset_view(false)) {
+      platform_log(PLATFORM_LOG_WARN, TAG, "1:1 rejected by memory");
+      return bmp_reset_view(true);
+    }
+    return true;
+  }
+
+  return bmp_reset_view(true);
+}
+
+static const char *bmp_shared_name_at(int index) {
+  if (!s_state.shared_names || s_state.shared_count <= 0 ||
+      s_state.shared_name_stride <= 0)
+    return NULL;
+  if (index < 0 || index >= s_state.shared_count)
+    return NULL;
+  return s_state.shared_names + (size_t)index * (size_t)s_state.shared_name_stride;
+}
+
+static bool bmp_switch_relative(int delta) {
+  char full[FM_PATH_MAX];
+  const char *name;
+  int next_index;
+
+  if (s_state.shared_count <= 1)
+    return true;
+
+  next_index = s_state.shared_index + delta;
+  if (next_index < 0)
+    next_index = s_state.shared_count - 1;
+  else if (next_index >= s_state.shared_count)
+    next_index = 0;
+
+  name = bmp_shared_name_at(next_index);
+  if (!name || !name[0])
+    return false;
+
+  if (snprintf(full, sizeof(full), "%s/%s", s_state.cwd, name) < 0 ||
+      strlen(full) >= sizeof(full))
+    return false;
+  if (!bmp_apply_path(full, true))
+    return false;
+
+  s_state.shared_index = next_index;
+  return true;
+}
+
+static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
+  lv_coord_t top = ui_chrome_body_top() + 2;
+  lv_coord_t bottom_reserved = 20;
+  lv_coord_t viewport_w = HAL_DISPLAY_WIDTH - 12;
+  lv_coord_t viewport_h = HAL_DISPLAY_HEIGHT - top - bottom_reserved;
+
+  memset(&s_state, 0, sizeof(s_state));
+  s_state.viewport_w = viewport_w;
+  s_state.viewport_h = viewport_h;
+  if (args->cwd)
+    strlcpy(s_state.cwd, args->cwd, sizeof(s_state.cwd));
+  s_state.shared_name_stride = args->shared_name_stride;
+  s_state.shared_count = args->shared_count;
+  s_state.shared_index = args->shared_index;
+  if (args->shared_names && args->shared_count > 0 && args->shared_name_stride > 0) {
+    s_state.shared_names = (char *)args->shared_names;
+    args->shared_names = NULL;
+  }
 
   ui_chrome_detach(&s_chrome);
   lv_obj_clean(args->screen);
@@ -622,7 +717,7 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
   lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_LEFT, 8, -2);
 
   s_active = true;
-  if (!bmp_reset_view(true)) {
+  if (!bmp_apply_path(path, false)) {
     preview_bmp_close();
     return false;
   }
@@ -632,6 +727,7 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
 static void preview_bmp_close(void) {
   bmp_release_canvas();
   bmp_release_doc();
+  bmp_release_shared_list();
   ui_chrome_detach(&s_chrome);
   s_viewport = NULL;
   s_canvas = NULL;
@@ -653,9 +749,11 @@ static bool preview_bmp_on_key(const input_gamepad_state *gp, const bool edge[])
     return false;
 
   if (edge[GAMEPAD_INPUT_L]) {
+    bmp_switch_relative(-1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_R]) {
+    bmp_switch_relative(1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_A]) {
@@ -703,4 +801,9 @@ const preview_app_t preview_bmp_app = {
     .close = preview_bmp_close,
     .on_key = preview_bmp_on_key,
     .on_timer = preview_bmp_on_timer,
+    .current_path = preview_bmp_current_path,
 };
+
+static const char *preview_bmp_current_path(void) {
+  return s_active ? s_state.path : NULL;
+}

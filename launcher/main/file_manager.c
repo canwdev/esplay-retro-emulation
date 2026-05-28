@@ -89,6 +89,12 @@ static const char *fm_entry_symbol(const char *name, bool is_dir);
 static void fm_virtual_sync_rows(void);
 static void fm_update_status_label(void);
 static bool fm_build_path(char *out, size_t out_sz, const char *name);
+static bool fm_is_bmp_filename(const char *name);
+typedef bool (*fm_preview_filter_fn)(const char *name);
+static fm_preview_filter_fn fm_preview_filter_for_name(const char *name);
+static char *fm_build_preview_shared_list(fm_preview_filter_fn filter,
+                                          const char *selected_name,
+                                          int *out_count, int *out_index);
 
 static const char *fm_root(void) {
   const char *root = hal_storage_root();
@@ -310,6 +316,68 @@ bool fm_is_mp3_filename(const char *name) {
 
 bool fm_is_playable_audio_filename(const char *name) {
   return fm_is_wav_filename(name) || fm_is_mp3_filename(name);
+}
+
+static bool fm_is_bmp_filename(const char *name) {
+  const char *dot = strrchr(name, '.');
+  return dot != NULL && strcasecmp(dot, ".bmp") == 0;
+}
+
+static fm_preview_filter_fn fm_preview_filter_for_name(const char *name) {
+  if (!name)
+    return NULL;
+  if (fm_is_playable_audio_filename(name))
+    return fm_is_playable_audio_filename;
+  if (fm_is_bmp_filename(name))
+    return fm_is_bmp_filename;
+  return NULL;
+}
+
+static char *fm_build_preview_shared_list(fm_preview_filter_fn filter,
+                                          const char *selected_name,
+                                          int *out_count, int *out_index) {
+  int count = 0;
+  int index = -1;
+  char *names = NULL;
+
+  if (out_count)
+    *out_count = 0;
+  if (out_index)
+    *out_index = -1;
+  if (!filter || !selected_name || !s_entries || s_entry_count == 0)
+    return NULL;
+
+  for (size_t i = 0; i < s_entry_count; i++) {
+    if (!s_entries[i].is_dir && filter(s_entries[i].name))
+      count++;
+  }
+  if (count <= 0)
+    return NULL;
+
+  names = (char *)platform_malloc((size_t)count * FM_NAME_LEN);
+  if (!names)
+    return NULL;
+
+  count = 0;
+  for (size_t i = 0; i < s_entry_count; i++) {
+    if (s_entries[i].is_dir || !filter(s_entries[i].name))
+      continue;
+    strlcpy(names + (size_t)count * FM_NAME_LEN, s_entries[i].name, FM_NAME_LEN);
+    if (strcmp(s_entries[i].name, selected_name) == 0)
+      index = count;
+    count++;
+  }
+
+  if (count <= 0 || index < 0) {
+    platform_free(names);
+    return NULL;
+  }
+
+  if (out_count)
+    *out_count = count;
+  if (out_index)
+    *out_index = index;
+  return names;
 }
 
 int fm_entry_compare(const void *a, const void *b) {
@@ -797,6 +865,14 @@ static void fm_prompt_delete(const char *fullpath) {
 
 static void fm_open_preview(const char *fullpath) {
   fm_remember_focus();
+  const char *selected_name = fm_base_name(fullpath);
+  fm_preview_filter_fn filter = fm_preview_filter_for_name(selected_name);
+  char *shared_names = NULL;
+  int shared_count = 0;
+  int shared_index = -1;
+
+  shared_names = fm_build_preview_shared_list(filter, selected_name, &shared_count,
+                                              &shared_index);
 
   /* Temporarily free file manager memory to give preview apps enough heap. */
   if (s_entries) {
@@ -808,11 +884,16 @@ static void fm_open_preview(const char *fullpath) {
       .screen = g_ui.screen,
       .input_group = g_ui.input_group,
       .cwd = fm_cwd,
+      .shared_names = shared_names,
+      .shared_count = shared_count,
+      .shared_index = shared_index,
+      .shared_name_stride = FM_NAME_LEN,
   };
 
   if (preview_open_for_path(fullpath, &args)) {
     g_ui.current_page = PAGE_FILES;
   } else {
+    platform_free(shared_names);
     /* If preview fails to open, restore file manager memory. */
     fm_create();
   }
@@ -987,6 +1068,12 @@ void fm_handle_back(void) {
     return;
 
   if (preview_is_active()) {
+    const char *path = preview_current_path();
+    const char *name = path ? fm_base_name(path) : NULL;
+    if (name && name[0]) {
+      strlcpy(fm_last_focus, name, sizeof(fm_last_focus));
+      fm_restore_focus = true;
+    }
     preview_close();
     fm_create();
     return;

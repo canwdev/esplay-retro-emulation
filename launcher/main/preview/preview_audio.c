@@ -3,22 +3,91 @@
 #ifdef TARGET_SIM
 
 #include "file_manager.h"
+#include "platform_mem.h"
 #include "ui_backlight.h"
 #include "ui_chrome.h"
 #include "ui_theme.h"
+#include "sim_compat.h"
 
 #include "lvgl.h"
 
 static const char *TAG = "preview_audio";
 static ui_chrome_t s_chrome;
 static lv_obj_t *s_body_label;
+static char s_current_path[FM_PATH_MAX];
+static char *s_shared_names;
+static int s_shared_count;
+static int s_shared_index;
+static int s_shared_name_stride;
+static char s_shared_cwd[FM_PATH_MAX];
 static bool s_opened;
+
+static const char *preview_audio_current_path(void) {
+  return s_opened ? s_current_path : NULL;
+}
+
+static const char *preview_audio_shared_name_at(int index) {
+  if (!s_shared_names || s_shared_count <= 0 || s_shared_name_stride <= 0)
+    return NULL;
+  if (index < 0 || index >= s_shared_count)
+    return NULL;
+  return s_shared_names + (size_t)index * (size_t)s_shared_name_stride;
+}
+
+static void preview_audio_release_shared_list(void) {
+  platform_free(s_shared_names);
+  s_shared_names = NULL;
+  s_shared_count = 0;
+  s_shared_index = -1;
+  s_shared_name_stride = 0;
+  s_shared_cwd[0] = '\0';
+}
+
+static void preview_audio_set_path(const char *path) {
+  strlcpy(s_current_path, path ? path : "", sizeof(s_current_path));
+  if (s_chrome.title_label)
+    lv_label_set_text(s_chrome.title_label, fm_base_name(s_current_path));
+}
+
+static void preview_audio_switch_relative(int delta) {
+  char full[FM_PATH_MAX];
+  const char *name;
+  int next;
+
+  if (s_shared_count <= 1)
+    return;
+  next = s_shared_index + delta;
+  if (next < 0)
+    next = s_shared_count - 1;
+  else if (next >= s_shared_count)
+    next = 0;
+  name = preview_audio_shared_name_at(next);
+  if (!name || !name[0])
+    return;
+  if (snprintf(full, sizeof(full), "%s/%s", s_shared_cwd, name) < 0 ||
+      strlen(full) >= sizeof(full))
+    return;
+  s_shared_index = next;
+  preview_audio_set_path(full);
+}
 
 static bool preview_audio_can_open(const char *path) {
   return fm_is_playable_audio_filename(fm_base_name(path));
 }
 
 static bool preview_audio_open(const char *path, preview_open_args_t *args) {
+  memset(s_current_path, 0, sizeof(s_current_path));
+  preview_audio_release_shared_list();
+  if (args->cwd)
+    strlcpy(s_shared_cwd, args->cwd, sizeof(s_shared_cwd));
+  s_shared_count = args->shared_count;
+  s_shared_index = args->shared_index;
+  s_shared_name_stride = args->shared_name_stride;
+  if (args->shared_names && args->shared_count > 0 && args->shared_name_stride > 0) {
+    s_shared_names = (char *)args->shared_names;
+    args->shared_names = NULL;
+  }
+
   lv_obj_clean(args->screen);
   ui_theme_apply_screen(args->screen);
   ui_chrome_detach(&s_chrome);
@@ -33,14 +102,17 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
                     "Use real hardware for playback validation.");
   lv_obj_align(s_body_label, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 10);
 
+  preview_audio_set_path(path);
   (void)TAG;
   s_opened = true;
   return true;
 }
 
 static void preview_audio_close(void) {
+  preview_audio_release_shared_list();
   ui_chrome_detach(&s_chrome);
   s_body_label = NULL;
+  s_current_path[0] = '\0';
   s_opened = false;
 }
 
@@ -51,6 +123,14 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     return false;
   if (edge[GAMEPAD_INPUT_MENU]) {
     ui_backlight_toggle();
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_L]) {
+    preview_audio_switch_relative(-1);
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_R]) {
+    preview_audio_switch_relative(1);
     return true;
   }
   return false;
@@ -66,6 +146,7 @@ const preview_app_t preview_audio_app = {
     .close    = preview_audio_close,
     .on_key   = preview_audio_on_key,
     .on_timer = preview_audio_on_timer,
+    .current_path = preview_audio_current_path,
 };
 
 #else
@@ -77,6 +158,7 @@ const preview_app_t preview_audio_app = {
 #include "ui_settings.h"
 #include "ui_chrome.h"
 #include "ui_theme.h"
+#include "platform_mem.h"
 #include "esp_log.h"
 #include "ui_backlight.h"
 #include <dirent.h>
@@ -101,6 +183,8 @@ static char (*s_playlist)[FM_NAME_LEN] = NULL;
 static int  s_playlist_count;
 static int  s_current_index;
 static char s_current_path[AUDIO_PATH_MAX];
+static char s_playlist_cwd[AUDIO_PATH_MAX];
+static bool s_playlist_from_shared;
 static bool s_active;
 
 static ui_chrome_t s_chrome;
@@ -136,6 +220,7 @@ static bool s_track_confirmed_playing;
 static bool s_vol_hold_armed;
 static int8_t s_vol_hold_dir;
 static uint32_t s_vol_hold_next_ms;
+static const char *preview_audio_current_path(void);
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -166,11 +251,26 @@ static int preview_playlist_compare(const void *a, const void *b) {
   return strcasecmp((const char *)a, (const char *)b);
 }
 
-static void preview_audio_build_playlist(const char *cwd, const char *current) {
+static void preview_audio_build_playlist(preview_open_args_t *args,
+                                         const char *current) {
   s_playlist_count = 0;
   s_current_index  = 0;
 
-  DIR *dir = opendir(cwd);
+  if (args->cwd)
+    strlcpy(s_playlist_cwd, args->cwd, sizeof(s_playlist_cwd));
+
+  if (args->shared_names && args->shared_count > 0 && args->shared_name_stride == FM_NAME_LEN) {
+    s_playlist = (char (*)[FM_NAME_LEN])args->shared_names;
+    args->shared_names = NULL;
+    s_playlist_from_shared = true;
+    s_playlist_count = args->shared_count;
+    s_current_index = args->shared_index >= 0 ? args->shared_index : 0;
+    if (s_current_index >= s_playlist_count)
+      s_current_index = 0;
+    return;
+  }
+
+  DIR *dir = opendir(s_playlist_cwd);
   if (!dir)
     return;
 
@@ -402,6 +502,17 @@ static void preview_audio_start_track(const char *path) {
   preview_audio_update_ui(true);
 }
 
+static bool preview_audio_build_path(char *out, size_t out_sz, const char *name) {
+  if (!out || out_sz == 0 || !name || name[0] == '\0' || s_playlist_cwd[0] == '\0')
+    return false;
+  strlcpy(out, s_playlist_cwd, out_sz);
+  if (strlcat(out, "/", out_sz) >= out_sz)
+    return false;
+  if (strlcat(out, name, out_sz) >= out_sz)
+    return false;
+  return true;
+}
+
 static void preview_audio_play_index(int idx) {
   if (s_playlist_count == 0)
     return;
@@ -411,8 +522,8 @@ static void preview_audio_play_index(int idx) {
   s_current_index = idx;
 
   char full[AUDIO_PATH_MAX];
-  snprintf(full, sizeof(full), "%s/%s", fm_get_cwd(),
-           s_playlist[s_current_index]);
+  if (!preview_audio_build_path(full, sizeof(full), s_playlist[s_current_index]))
+    return;
 
   ESP_LOGI("preview_audio", "play_index idx=%d playlist=%s count=%d full=%s",
            idx, s_playlist[idx], s_playlist_count, full);
@@ -422,7 +533,13 @@ static void preview_audio_play_index(int idx) {
 /* ------------------------------------------------------------------ open */
 
 static bool preview_audio_open(const char *path, preview_open_args_t *args) {
-  if (!s_playlist) {
+  s_playlist = NULL;
+  s_playlist_count = 0;
+  s_current_index = 0;
+  s_playlist_cwd[0] = '\0';
+  s_playlist_from_shared = false;
+
+  if (!args->shared_names) {
     s_playlist = malloc(AUDIO_PLAYLIST_MAX * FM_NAME_LEN);
     if (!s_playlist) {
       ESP_LOGE("preview_audio", "Failed to allocate memory for s_playlist");
@@ -430,7 +547,7 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
     }
   }
 
-  preview_audio_build_playlist(args->cwd, path);
+  preview_audio_build_playlist(args, path);
 
   ui_chrome_detach(&s_chrome);
   lv_obj_clean(args->screen);
@@ -557,9 +674,16 @@ static void preview_audio_close(void) {
   }
 
   if (s_playlist) {
-    free(s_playlist);
+    if (s_playlist_from_shared)
+      platform_free(s_playlist);
+    else
+      free(s_playlist);
     s_playlist = NULL;
   }
+  s_playlist_count = 0;
+  s_current_index = 0;
+  s_playlist_cwd[0] = '\0';
+  s_playlist_from_shared = false;
   ui_chrome_detach(&s_chrome);
   preview_audio_vol_hold_reset();
   s_active        = false;
@@ -677,6 +801,10 @@ static void preview_audio_on_timer(void) {
   preview_audio_update_ui(false);
 }
 
+static const char *preview_audio_current_path(void) {
+  return s_active ? s_current_path : NULL;
+}
+
 /* ------------------------------------------------------------------ export */
 
 const preview_app_t preview_audio_app = {
@@ -686,6 +814,7 @@ const preview_app_t preview_audio_app = {
     .close    = preview_audio_close,
     .on_key   = preview_audio_on_key,
     .on_timer = preview_audio_on_timer,
+    .current_path = preview_audio_current_path,
 };
 
 #endif
