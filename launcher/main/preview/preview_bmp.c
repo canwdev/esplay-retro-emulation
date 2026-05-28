@@ -398,9 +398,27 @@ static bool bmp_ensure_canvas(uint32_t scale) {
   lv_coord_t req_w = LV_MIN(draw_w, s_state.viewport_w);
   lv_coord_t req_h = LV_MIN(draw_h, s_state.viewport_h);
 
+#ifndef TARGET_SIM
+  current = bmp_current_canvas_bytes();
+  uint32_t free_heap = platform_free_heap();
+  uint32_t max_bytes = free_heap + current;
+  if (max_bytes > BMP_CANVAS_RESERVE_BYTES) {
+    max_bytes -= BMP_CANVAS_RESERVE_BYTES;
+  } else {
+    max_bytes = 0;
+  }
+  
+  while (req_w > 16 && req_h > 16 && bmp_canvas_bytes(req_w, req_h) > max_bytes) {
+    req_w = (req_w * 9) / 10;
+    req_h = (req_h * 9) / 10;
+  }
+#endif
+
   if (s_state.canvas_draw_bufs[0] && s_state.canvas_w == req_w &&
-      s_state.canvas_h == req_h)
+      s_state.canvas_h == req_h) {
+    s_state.canvas_scale = scale;
     return true;
+  }
 
   need = bmp_canvas_bytes(req_w, req_h);
   current = bmp_current_canvas_bytes();
@@ -519,33 +537,29 @@ static bool bmp_apply_transform(void) {
   lv_coord_t draw_h;
 
   bmp_scaled_size(s_state.scale, &draw_w, &draw_h);
-  bmp_clamp_pan(draw_w, draw_h);
 
   if (!bmp_ensure_canvas(s_state.scale))
     return false;
 
-  lv_coord_t req_w = LV_MIN(draw_w, s_state.viewport_w);
-  lv_coord_t req_h = LV_MIN(draw_h, s_state.viewport_h);
+  bmp_clamp_pan(draw_w, draw_h);
 
-  if (s_state.canvas_scale != s_state.scale || s_state.canvas_w != req_w ||
-      s_state.canvas_h != req_h) {
+  if (s_state.canvas_scale != s_state.scale) {
     platform_log(PLATFORM_LOG_ERROR, TAG,
-                 "canvas shape mismatch scale=%u want=%dx%d got=%dx%d scale_cached=%u",
-                 (unsigned)s_state.scale, (int)req_w, (int)req_h,
-                 (int)s_state.canvas_w, (int)s_state.canvas_h,
-                 (unsigned)s_state.canvas_scale);
+                 "canvas scale mismatch want=%u got=%u",
+                 (unsigned)s_state.scale, (unsigned)s_state.canvas_scale);
     return false;
   }
+  
   if (!bmp_render_canvas()) {
     platform_log(PLATFORM_LOG_ERROR, TAG, "render failed: %s", s_state.path);
     return false;
   }
   
-  lv_coord_t tile_h = (req_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
+  lv_coord_t tile_h = (s_state.canvas_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
   for (int i = 0; i < BMP_CANVAS_TILES; i++) {
     if (s_canvases[i] && s_state.canvas_draw_bufs[i]) {
-      lv_obj_set_pos(s_canvases[i], (s_state.viewport_w - req_w) / 2,
-                     (s_state.viewport_h - req_h) / 2 + i * tile_h);
+      lv_obj_set_pos(s_canvases[i], (s_state.viewport_w - s_state.canvas_w) / 2,
+                     (s_state.viewport_h - s_state.canvas_h) / 2 + i * tile_h);
     }
   }
   return true;
@@ -569,24 +583,19 @@ static uint32_t bmp_zoom_next(uint32_t scale, bool zoom_in) {
 }
 
 static void bmp_pan_by(int32_t dx, int32_t dy) {
-  lv_coord_t draw_w;
-  lv_coord_t draw_h;
-  bmp_scaled_size(s_state.scale, &draw_w, &draw_h);
   s_state.pan_x += dx;
   s_state.pan_y += dy;
-  bmp_clamp_pan(draw_w, draw_h);
   bmp_apply_transform();
 }
 
 static bool bmp_set_scale_with_reserve(uint32_t scale, bool allow_reduce,
                                        uint32_t reserve_bytes) {
   uint32_t target = scale;
-  if (allow_reduce)
+  if (allow_reduce) {
     target = bmp_scale_fit_budget_with_reserve(target, reserve_bytes);
-  else if (!bmp_scale_fits_budget_with_reserve(target, reserve_bytes))
-    return false;
-  if (target == 0)
-    return false;
+    if (target == 0)
+      return false;
+  }
   s_state.scale = target;
   s_state.pan_x = 0;
   s_state.pan_y = 0;
@@ -603,7 +612,7 @@ static bool bmp_reset_view(bool fit_to_screen) {
     return bmp_set_scale_with_reserve(s_state.fit_scale, true,
                                       BMP_FIT_CANVAS_RESERVE_BYTES);
   }
-  return bmp_set_scale(LV_SCALE_NONE, true);
+  return bmp_set_scale(LV_SCALE_NONE, false);
 }
 
 static bool bmp_is_fit_view(void) {
