@@ -1,5 +1,4 @@
 /* Esplay Launcher Main File */
-#include "audio.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -42,7 +41,9 @@ void app_tick(void) {
 }
 #endif
 
-#define LVGL_TICK_PERIOD_MS 5
+#define LVGL_TICK_PERIOD_MS           5
+#define MAIN_LOOP_MAX_DELAY_ACTIVE_MS 10
+#define MAIN_LOOP_MAX_DELAY_DIMMED_MS 50
 
 void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   lv_draw_sw_rgb565_swap(px_map, lv_area_get_size(area));
@@ -121,16 +122,23 @@ static void init_lvgl_display(void) {
 
 static void init_ui(void) { hal_storage_mount(); }
 
+static uint32_t main_loop_max_delay_ms(void) {
+  return ui_backlight_is_on() ? MAIN_LOOP_MAX_DELAY_ACTIVE_MS
+                              : MAIN_LOOP_MAX_DELAY_DIMMED_MS;
+}
+
 static void run_main_loop(void) {
   TickType_t xLast = xTaskGetTickCount();
   while (1) {
     app_tick();
     uint32_t time_till_next = lv_timer_handler();
-    /* During audio playback throttle the LVGL render loop to ~25 fps so the
-     * LCD SPI DMA and esp_timer overhead don't compete with the audio task. */
-    uint32_t max_delay = audio_is_playing() ? 40 : 10;
-    uint32_t delay = (time_till_next > max_delay) ? max_delay : time_till_next;
+    uint32_t max_delay = main_loop_max_delay_ms();
+    uint32_t delay =
+        (time_till_next > max_delay) ? max_delay : time_till_next;
     vTaskDelay(pdMS_TO_TICKS(delay));
+
+    if (!ui_backlight_is_on())
+      continue;
 
     TickType_t xNow = xTaskGetTickCount();
     if ((xNow - xLast) > pdMS_TO_TICKS(2000)) {

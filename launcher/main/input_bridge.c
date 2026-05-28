@@ -13,6 +13,10 @@ static bool s_last_valid;
 static lv_timer_t *s_poll_timer;
 static bool s_block_enter_until_a_release;
 static bool s_swallow_until_all_released;
+static bool s_poll_dimmed;
+
+#define INPUT_POLL_MS_ACTIVE 20
+#define INPUT_POLL_MS_DIMMED 50
 
 void input_bridge_block_enter_until_release(void) {
   s_block_enter_until_a_release = true;
@@ -31,8 +35,19 @@ static bool input_any_pressed(const input_gamepad_state *gp) {
   return false;
 }
 
+static void input_bridge_sync_poll_period(void) {
+  bool dimmed = !ui_backlight_is_on();
+  if (dimmed == s_poll_dimmed || !s_poll_timer)
+    return;
+  s_poll_dimmed = dimmed;
+  lv_timer_set_period(s_poll_timer, dimmed ? INPUT_POLL_MS_DIMMED
+                                           : INPUT_POLL_MS_ACTIVE);
+}
+
 static void input_poll_timer_cb(lv_timer_t *t) {
   (void)t;
+  input_bridge_sync_poll_period();
+
   input_gamepad_state gp;
   hal_input_poll();
   hal_input_read(&gp);
@@ -117,8 +132,10 @@ static void input_poll_timer_cb(lv_timer_t *t) {
 void input_bridge_init(void) {
   s_last_valid = false;
   s_swallow_until_all_released = false;
-  s_poll_timer = lv_timer_create(input_poll_timer_cb, 20, NULL);
+  s_poll_dimmed = false;
+  s_poll_timer = lv_timer_create(input_poll_timer_cb, INPUT_POLL_MS_ACTIVE, NULL);
   lv_timer_set_repeat_count(s_poll_timer, -1);
+  input_bridge_sync_poll_period();
 }
 
 void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {

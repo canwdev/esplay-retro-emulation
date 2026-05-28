@@ -132,7 +132,10 @@ int main(int argc, char **argv) {
     }
 
     uint32_t ms = lv_timer_handler();
-    platform_sleep_ms(ms > 10 ? 10 : ms);
+    uint32_t max_delay = ui_backlight_is_on() ? 10 : 50;
+    if (ms > max_delay)
+      ms = max_delay;
+    platform_sleep_ms(ms);
   }
 
   SDL_Quit();
