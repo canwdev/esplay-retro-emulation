@@ -160,6 +160,7 @@ const preview_app_t preview_audio_app = {
 #include "ui_theme.h"
 #include "platform_mem.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "ui_backlight.h"
 #include <dirent.h>
 #include <stdint.h>
@@ -174,6 +175,7 @@ const preview_app_t preview_audio_app = {
 
 typedef enum {
   PLAY_MODE_LIST_LOOP = 0, /* wrap around at end of list  (default) */
+  PLAY_MODE_SHUFFLE,       /* Fisher-Yates shuffled cycle, no repeat per round */
   PLAY_MODE_SINGLE_LOOP,   /* replay the same track forever          */
   PLAY_MODE_LIST_PLAY,     /* play to last track then stop           */
   PLAY_MODE_COUNT,
@@ -182,6 +184,8 @@ typedef enum {
 static char (*s_playlist)[FM_NAME_LEN] = NULL;
 static int  s_playlist_count;
 static int  s_current_index;
+static int  s_shuffle_order[AUDIO_PLAYLIST_MAX];
+static int  s_shuffle_pos;
 static char s_current_path[AUDIO_PATH_MAX];
 static char s_playlist_cwd[AUDIO_PATH_MAX];
 static bool s_playlist_from_shared;
@@ -227,6 +231,7 @@ static const char *preview_audio_current_path(void);
 static const char *play_mode_text(play_mode_t m) {
   switch (m) {
     case PLAY_MODE_LIST_LOOP:   return LV_SYMBOL_LOOP " All";
+    case PLAY_MODE_SHUFFLE:     return LV_SYMBOL_SHUFFLE " Rand";
     case PLAY_MODE_SINGLE_LOOP: return LV_SYMBOL_LOOP " x1";
     case PLAY_MODE_LIST_PLAY:   return LV_SYMBOL_NEXT " Seq";
     default: return "";
@@ -251,10 +256,71 @@ static int preview_playlist_compare(const void *a, const void *b) {
   return strcasecmp((const char *)a, (const char *)b);
 }
 
+static void preview_audio_shuffle_reset(int start_index) {
+  if (s_playlist_count <= 0)
+    return;
+
+  if (start_index < 0 || start_index >= s_playlist_count)
+    start_index = 0;
+
+  for (int i = 0; i < s_playlist_count; i++)
+    s_shuffle_order[i] = i;
+
+  if (start_index != 0) {
+    int tmp = s_shuffle_order[0];
+    s_shuffle_order[0] = s_shuffle_order[start_index];
+    s_shuffle_order[start_index] = tmp;
+  }
+
+  for (int i = s_playlist_count - 1; i > 1; i--) {
+    uint32_t r = esp_random();
+    int j = 1 + (int)(r % (uint32_t)i);
+    int tmp = s_shuffle_order[i];
+    s_shuffle_order[i] = s_shuffle_order[j];
+    s_shuffle_order[j] = tmp;
+  }
+
+  s_shuffle_pos = 0;
+}
+
+static int preview_audio_shuffle_find_pos(int playlist_index) {
+  for (int i = 0; i < s_playlist_count; i++) {
+    if (s_shuffle_order[i] == playlist_index)
+      return i;
+  }
+  return 0;
+}
+
+static int preview_audio_shuffle_step(int delta, bool restart_round) {
+  if (s_playlist_count <= 1)
+    return s_current_index;
+
+  s_shuffle_pos = preview_audio_shuffle_find_pos(s_current_index);
+
+  if (delta > 0) {
+    if (restart_round && s_shuffle_pos >= s_playlist_count - 1) {
+      preview_audio_shuffle_reset(s_current_index);
+      if (s_playlist_count > 1)
+        s_shuffle_pos = 1;
+      return s_shuffle_order[s_shuffle_pos];
+    }
+    s_shuffle_pos++;
+    if (s_shuffle_pos >= s_playlist_count)
+      s_shuffle_pos = 0;
+  } else if (delta < 0) {
+    s_shuffle_pos--;
+    if (s_shuffle_pos < 0)
+      s_shuffle_pos = s_playlist_count - 1;
+  }
+
+  return s_shuffle_order[s_shuffle_pos];
+}
+
 static void preview_audio_build_playlist(preview_open_args_t *args,
                                          const char *current) {
   s_playlist_count = 0;
   s_current_index  = 0;
+  s_shuffle_pos    = 0;
 
   if (args->cwd)
     strlcpy(s_playlist_cwd, args->cwd, sizeof(s_playlist_cwd));
@@ -267,6 +333,7 @@ static void preview_audio_build_playlist(preview_open_args_t *args,
     s_current_index = args->shared_index >= 0 ? args->shared_index : 0;
     if (s_current_index >= s_playlist_count)
       s_current_index = 0;
+    preview_audio_shuffle_reset(s_current_index);
     return;
   }
 
@@ -295,6 +362,8 @@ static void preview_audio_build_playlist(preview_open_args_t *args,
       break;
     }
   }
+
+  preview_audio_shuffle_reset(s_current_index);
 }
 
 /* ------------------------------------------------------------------ UI update */
@@ -536,6 +605,7 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   s_playlist = NULL;
   s_playlist_count = 0;
   s_current_index = 0;
+  s_shuffle_pos = 0;
   s_playlist_cwd[0] = '\0';
   s_playlist_from_shared = false;
 
@@ -726,11 +796,17 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     return true;
   }
   if (edge[GAMEPAD_INPUT_L]) {
-    preview_audio_play_index(s_current_index - 1);
+    if (s_play_mode == PLAY_MODE_SHUFFLE)
+      preview_audio_play_index(preview_audio_shuffle_step(-1, false));
+    else
+      preview_audio_play_index(s_current_index - 1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_R]) {
-    preview_audio_play_index(s_current_index + 1);
+    if (s_play_mode == PLAY_MODE_SHUFFLE)
+      preview_audio_play_index(preview_audio_shuffle_step(1, false));
+    else
+      preview_audio_play_index(s_current_index + 1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_START] || edge[GAMEPAD_INPUT_A]) {
@@ -742,6 +818,8 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
   }
   if (edge[GAMEPAD_INPUT_SELECT]) {
     s_play_mode = (play_mode_t)((s_play_mode + 1) % PLAY_MODE_COUNT);
+    if (s_play_mode == PLAY_MODE_SHUFFLE)
+      preview_audio_shuffle_reset(s_current_index);
     update_mode_label();
     return true;
   }
@@ -782,6 +860,9 @@ static void preview_audio_on_timer(void) {
     switch (s_play_mode) {
       case PLAY_MODE_LIST_LOOP:
         preview_audio_play_index((s_current_index + 1) % s_playlist_count);
+        return;
+      case PLAY_MODE_SHUFFLE:
+        preview_audio_play_index(preview_audio_shuffle_step(1, true));
         return;
       case PLAY_MODE_SINGLE_LOOP:
         preview_audio_play_index(s_current_index);
