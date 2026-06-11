@@ -64,3 +64,4 @@ dkms.conf
 
 managed_components/
 /.idea
+/dist

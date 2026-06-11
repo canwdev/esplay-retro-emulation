@@ -230,10 +230,10 @@ static const char *preview_audio_current_path(void);
 
 static const char *play_mode_text(play_mode_t m) {
   switch (m) {
-    case PLAY_MODE_LIST_LOOP:   return LV_SYMBOL_LOOP " All";
-    case PLAY_MODE_SHUFFLE:     return LV_SYMBOL_SHUFFLE " Rand";
-    case PLAY_MODE_SINGLE_LOOP: return LV_SYMBOL_LOOP " x1";
-    case PLAY_MODE_LIST_PLAY:   return LV_SYMBOL_NEXT " Seq";
+    case PLAY_MODE_LIST_LOOP:   return LV_SYMBOL_LOOP " All Loop";
+    case PLAY_MODE_SHUFFLE:     return LV_SYMBOL_SHUFFLE " Random";
+    case PLAY_MODE_SINGLE_LOOP: return LV_SYMBOL_LOOP " x1 Loop";
+    case PLAY_MODE_LIST_PLAY:   return LV_SYMBOL_NEXT " Sequential";
     default: return "";
   }
 }
