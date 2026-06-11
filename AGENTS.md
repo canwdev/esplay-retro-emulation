@@ -1,4 +1,4 @@
-# ESPlay Retro Emulation — Launcher 项目现状
+# 项目现状
 
 本文件描述 **当前仓库实际目标与约束**，供 Cursor Agent 修改代码时遵循。快速上手见 [README.MD](README.MD)；以本文件为准的功能范围与构建细节 **优先于** README 及上游 fork 说明。
 

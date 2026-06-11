@@ -2,6 +2,13 @@
 
 [中文](#中文) · [English](#english)
 
+![screenshoot](./docs/2026-06-11_203845.png)
+![screenshoot](./docs/2026-06-11_204138.png)
+![screenshoot](./docs/2026-06-11_204154.png)
+![screenshoot](./docs/2026-06-11_204420.png)
+![screenshoot](./docs/2026-06-11_204236.png)
+![screenshoot](./docs/2026-06-11_204314.png)
+
 ---
 
 ## 中文
