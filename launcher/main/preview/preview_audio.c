@@ -3,12 +3,14 @@
 #include "audio.h"
 #include "file_manager.h"
 #include "hal_settings.h"
+#include "input_bridge.h"
 #include "input_repeat.h"
 #include "platform_log.h"
 #include "platform_mem.h"
 #include "platform_time.h"
 #include "ui_backlight.h"
 #include "ui_chrome.h"
+#include "ui_home.h"
 #include "ui_settings.h"
 #include "ui_theme.h"
 
@@ -909,9 +911,10 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     return true;
   }
   if (edge[GAMEPAD_INPUT_MENU]) {
-    ui_backlight_toggle();
-    if (ui_backlight_is_on())
-      preview_audio_update_ui(true);
+    s_close_to_background = true;
+    preview_audio_sync_file_manager_cwd();
+    preview_close();
+    ui_home_create();
     return true;
   }
 
