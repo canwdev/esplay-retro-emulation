@@ -32,6 +32,7 @@ FetchContent_MakeAvailable(lvgl)
 add_executable(launcher_sim
   main.c
   ../port/sim/dirent.c
+  ../port/sim/audio_sim.c
   ../port/sim/hal_audio_stub.c
   ../port/sim/hal_display_sdl.c
   ../port/sim/hal_input_sdl.c
@@ -59,7 +60,15 @@ add_executable(launcher_sim
 )
 
 target_compile_definitions(launcher_sim PRIVATE TARGET_SIM)
-target_include_directories(launcher_sim PRIVATE ../main ../main/preview ../hal ../port/sim "${lvgl_SOURCE_DIR}/src")
+target_include_directories(launcher_sim PRIVATE
+  ../main
+  ../main/preview
+  ../hal
+  ../port/sim
+  ../../esplay-sdk/hal-drivers
+  ../../esplay-sdk/hal-drivers/include
+  "${lvgl_SOURCE_DIR}/src"
+)
 target_link_libraries(launcher_sim PRIVATE lvgl SDL2::SDL2)
 
 # ui_font_esplayfont.c contains UTF-8 glyph comments (CJK); avoid MSVC C4819 on CP936.

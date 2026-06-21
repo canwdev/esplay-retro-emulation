@@ -1,4 +1,5 @@
 #include "hal_display.h"
+#include "hal_audio.h"
 #include "hal_input.h"
 #include "hal_storage.h"
 #include "input_bridge.h"
@@ -68,12 +69,13 @@ int main(int argc, char **argv) {
   SetUnhandledExceptionFilter(sim_unhandled_exception_filter);
 #endif
 
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
+  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_AUDIO) != 0) {
     platform_log(PLATFORM_LOG_ERROR, "sim", "SDL_Init failed: %s",
                  SDL_GetError());
     return 1;
   }
 
+  hal_audio_init();
   hal_display_init();
   hal_input_init();
   if (!hal_storage_mount()) {

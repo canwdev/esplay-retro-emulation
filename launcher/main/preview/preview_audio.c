@@ -1,172 +1,45 @@
 #include "preview_audio.h"
 
-#ifdef TARGET_SIM
-
-#include "file_manager.h"
-#include "platform_mem.h"
-#include "ui_backlight.h"
-#include "ui_chrome.h"
-#include "ui_theme.h"
-#include "sim_compat.h"
-
-#include "lvgl.h"
-
-static const char *TAG = "preview_audio";
-static ui_chrome_t s_chrome;
-static lv_obj_t *s_body_label;
-static char s_current_path[FM_PATH_MAX];
-static char *s_shared_names;
-static int s_shared_count;
-static int s_shared_index;
-static int s_shared_name_stride;
-static char s_shared_cwd[FM_PATH_MAX];
-static bool s_opened;
-
-static const char *preview_audio_current_path(void) {
-  return s_opened ? s_current_path : NULL;
-}
-
-static const char *preview_audio_shared_name_at(int index) {
-  if (!s_shared_names || s_shared_count <= 0 || s_shared_name_stride <= 0)
-    return NULL;
-  if (index < 0 || index >= s_shared_count)
-    return NULL;
-  return s_shared_names + (size_t)index * (size_t)s_shared_name_stride;
-}
-
-static void preview_audio_release_shared_list(void) {
-  platform_free(s_shared_names);
-  s_shared_names = NULL;
-  s_shared_count = 0;
-  s_shared_index = -1;
-  s_shared_name_stride = 0;
-  s_shared_cwd[0] = '\0';
-}
-
-static void preview_audio_set_path(const char *path) {
-  strlcpy(s_current_path, path ? path : "", sizeof(s_current_path));
-  if (s_chrome.title_label)
-    lv_label_set_text(s_chrome.title_label, fm_base_name(s_current_path));
-}
-
-static void preview_audio_switch_relative(int delta) {
-  char full[FM_PATH_MAX];
-  const char *name;
-  int next;
-
-  if (s_shared_count <= 1)
-    return;
-  next = s_shared_index + delta;
-  if (next < 0)
-    next = s_shared_count - 1;
-  else if (next >= s_shared_count)
-    next = 0;
-  name = preview_audio_shared_name_at(next);
-  if (!name || !name[0])
-    return;
-  if (snprintf(full, sizeof(full), "%s/%s", s_shared_cwd, name) < 0 ||
-      strlen(full) >= sizeof(full))
-    return;
-  s_shared_index = next;
-  preview_audio_set_path(full);
-}
-
-static bool preview_audio_can_open(const char *path) {
-  return fm_is_playable_audio_filename(fm_base_name(path));
-}
-
-static bool preview_audio_open(const char *path, preview_open_args_t *args) {
-  memset(s_current_path, 0, sizeof(s_current_path));
-  preview_audio_release_shared_list();
-  if (args->cwd)
-    strlcpy(s_shared_cwd, args->cwd, sizeof(s_shared_cwd));
-  s_shared_count = args->shared_count;
-  s_shared_index = args->shared_index;
-  s_shared_name_stride = args->shared_name_stride;
-  if (args->shared_names && args->shared_count > 0 && args->shared_name_stride > 0) {
-    s_shared_names = (char *)args->shared_names;
-    args->shared_names = NULL;
-  }
-
-  lv_obj_clean(args->screen);
-  ui_theme_apply_screen(args->screen);
-  ui_chrome_detach(&s_chrome);
-  s_chrome = ui_chrome_create(args->screen, fm_base_name(path));
-
-  s_body_label = lv_label_create(args->screen);
-  ui_theme_style_label_primary(s_body_label);
-  lv_label_set_long_mode(s_body_label, LV_LABEL_LONG_MODE_WRAP);
-  lv_obj_set_width(s_body_label, 300);
-  lv_label_set_text(s_body_label,
-                    "Audio preview is not supported in the simulator.\n"
-                    "Use real hardware for playback validation.");
-  lv_obj_align(s_body_label, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 10);
-
-  preview_audio_set_path(path);
-  (void)TAG;
-  s_opened = true;
-  return true;
-}
-
-static void preview_audio_close(void) {
-  preview_audio_release_shared_list();
-  ui_chrome_detach(&s_chrome);
-  s_body_label = NULL;
-  s_current_path[0] = '\0';
-  s_opened = false;
-}
-
-static bool preview_audio_on_key(const input_gamepad_state *gp,
-                                const bool edge[]) {
-  (void)gp;
-  if (!s_opened)
-    return false;
-  if (edge[GAMEPAD_INPUT_MENU]) {
-    ui_backlight_toggle();
-    return true;
-  }
-  if (edge[GAMEPAD_INPUT_L]) {
-    preview_audio_switch_relative(-1);
-    return true;
-  }
-  if (edge[GAMEPAD_INPUT_R]) {
-    preview_audio_switch_relative(1);
-    return true;
-  }
-  return false;
-}
-
-static void preview_audio_on_timer(void) {
-}
-
-const preview_app_t preview_audio_app = {
-    .id       = "audio",
-    .can_open = preview_audio_can_open,
-    .open     = preview_audio_open,
-    .close    = preview_audio_close,
-    .on_key   = preview_audio_on_key,
-    .on_timer = preview_audio_on_timer,
-    .current_path = preview_audio_current_path,
-};
-
-#else
-
 #include "audio.h"
 #include "file_manager.h"
-#include "lcd.h"
-#include "settings.h"
-#include "ui_settings.h"
-#include "ui_chrome.h"
-#include "ui_theme.h"
+#include "platform_log.h"
 #include "platform_mem.h"
-#include "esp_log.h"
-#include "esp_random.h"
+#include "platform_time.h"
 #include "ui_backlight.h"
+#include "ui_chrome.h"
+#include "ui_settings.h"
+#include "ui_theme.h"
+
+#ifdef TARGET_SIM
+#include "sim_compat.h"
+#else
+#include "esp_random.h"
+#endif
+
 #include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+
+static const char *TAG = "preview_audio";
+
+#define PREVIEW_AUDIO_LOGI(...) platform_log(PLATFORM_LOG_INFO, TAG, __VA_ARGS__)
+#define PREVIEW_AUDIO_LOGW(...) platform_log(PLATFORM_LOG_WARN, TAG, __VA_ARGS__)
+#define PREVIEW_AUDIO_LOGE(...) platform_log(PLATFORM_LOG_ERROR, TAG, __VA_ARGS__)
+
+static uint32_t preview_audio_random_u32(void) {
+#ifdef TARGET_SIM
+  return ((uint32_t)rand() << 16) ^ (uint32_t)rand();
+#else
+  return esp_random();
+#endif
+}
+
+static void preview_audio_wait_ms(uint32_t ms) {
+  platform_sleep_ms(ms);
+}
 
 #define AUDIO_PLAYLIST_MAX 512
 #define AUDIO_PATH_MAX     256
@@ -273,7 +146,7 @@ static void preview_audio_shuffle_reset(int start_index) {
   }
 
   for (int i = s_playlist_count - 1; i > 1; i--) {
-    uint32_t r = esp_random();
+    uint32_t r = preview_audio_random_u32();
     int j = 1 + (int)(r % (uint32_t)i);
     int tmp = s_shuffle_order[i];
     s_shuffle_order[i] = s_shuffle_order[j];
@@ -438,8 +311,8 @@ static void preview_audio_update_ui(bool force) {
       lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
     else {
       lv_label_set_text(s_status_label, LV_SYMBOL_STOP " Stop");
-      ESP_LOGW("preview_audio", "update_ui: trans to STOP! prev_paused=%d prev_playing=%d",
-               s_last_paused, s_last_playing);
+      PREVIEW_AUDIO_LOGW("update_ui: trans to STOP! prev_paused=%d prev_playing=%d",
+                         s_last_paused, s_last_playing);
     }
     s_last_paused  = paused;
     s_last_playing = playing;
@@ -559,15 +432,15 @@ static void preview_audio_arm_volume_hold(int8_t dir) {
 
 static void preview_audio_start_track(const char *path) {
   bool was_playing = audio_is_playing();
-  ESP_LOGI("preview_audio", "start_track ENTER: path=%s was_playing=%d",
-           path, was_playing);
+  PREVIEW_AUDIO_LOGI("start_track ENTER: path=%s was_playing=%d",
+                     path, was_playing);
   strlcpy(s_current_path, path, sizeof(s_current_path));
   s_track_confirmed_playing = false;
   audio_play_file_async(path);
   bool now_playing = audio_is_playing();
   if (s_filename_label && lv_obj_is_valid(s_filename_label))
     lv_label_set_text(s_filename_label, fm_base_name(path));
-  ESP_LOGI("preview_audio", "start_track EXIT: now_playing=%d", now_playing);
+  PREVIEW_AUDIO_LOGI("start_track EXIT: now_playing=%d", now_playing);
   preview_audio_update_ui(true);
 }
 
@@ -594,8 +467,8 @@ static void preview_audio_play_index(int idx) {
   if (!preview_audio_build_path(full, sizeof(full), s_playlist[s_current_index]))
     return;
 
-  ESP_LOGI("preview_audio", "play_index idx=%d playlist=%s count=%d full=%s",
-           idx, s_playlist[idx], s_playlist_count, full);
+  PREVIEW_AUDIO_LOGI("play_index idx=%d playlist=%s count=%d full=%s",
+                     idx, s_playlist[idx], s_playlist_count, full);
   preview_audio_start_track(full);
 }
 
@@ -612,7 +485,7 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   if (!args->shared_names) {
     s_playlist = malloc(AUDIO_PLAYLIST_MAX * FM_NAME_LEN);
     if (!s_playlist) {
-      ESP_LOGE("preview_audio", "Failed to allocate memory for s_playlist");
+      PREVIEW_AUDIO_LOGE("Failed to allocate memory for s_playlist");
       return false;
     }
   }
@@ -737,11 +610,10 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
 
 static void preview_audio_close(void) {
   audio_stop_playback();
-  /* Wait for audio task to exit to free its 32KB stack. */
-  TickType_t start = xTaskGetTickCount();
-  while (audio_is_playing() && (xTaskGetTickCount() - start) < pdMS_TO_TICKS(500)) {
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
+  /* Wait for the backend worker to exit so switching tracks does not race. */
+  uint32_t start = platform_millis();
+  while (audio_is_playing() && (platform_millis() - start) < 500)
+    preview_audio_wait_ms(10);
 
   if (s_playlist) {
     if (s_playlist_from_shared)
@@ -811,7 +683,7 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
   }
   if (edge[GAMEPAD_INPUT_START] || edge[GAMEPAD_INPUT_A]) {
     bool p = audio_is_paused(), pl = audio_is_playing();
-    ESP_LOGI("preview_audio", "key: START/A toggle pause p=%d playing=%d", p, pl);
+    PREVIEW_AUDIO_LOGI("key: START/A toggle pause p=%d playing=%d", p, pl);
     audio_toggle_pause();
     preview_audio_update_ui(true);
     return true;
@@ -853,8 +725,8 @@ static void preview_audio_on_timer(void) {
 
   /* Detect natural track end and auto-advance according to play mode. */
   if (s_track_confirmed_playing && !playing && !paused) {
-    ESP_LOGI("preview_audio", "timer: track-end detected, mode=%d idx=%d cnt=%d",
-             s_play_mode, s_current_index, s_playlist_count);
+    PREVIEW_AUDIO_LOGI("timer: track-end detected, mode=%d idx=%d cnt=%d",
+                       s_play_mode, s_current_index, s_playlist_count);
     s_track_confirmed_playing = false;
     s_last_playing = false; /* prevent stale UI state triggering on next tick */
     switch (s_play_mode) {
@@ -897,5 +769,3 @@ const preview_app_t preview_audio_app = {
     .on_timer = preview_audio_on_timer,
     .current_path = preview_audio_current_path,
 };
-
-#endif
