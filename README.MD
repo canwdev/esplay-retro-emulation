@@ -1,12 +1,8 @@
 # ESPlay Neo Firmware
 
-[中文](#中文) · [English](#english)
+中文 · [English](./README-en.MD)
 
 ![screenshoot](./docs/2026-06-11.png)
-
----
-
-## 中文
 
 面向 **ESPlay Micro** 的固件：SD 卡文件管理、音频/文本预览与系统设置。Fork 自 [pebri86/esplay-retro-emulation](https://github.com/pebri86/esplay-retro-emulation)。
 
@@ -15,7 +11,9 @@
 ### 功能
 
 - **文件管理** — 浏览 SD 卡、虚拟滚动、删除
-- **预览** — 文件管理器内 WAV/MP3 与文本（UTF-8 / GB2312）
+- **音乐播放器** — WAV/MP3，支持后台播放
+- **文本阅读器** — TXT 等支持格式，UTF-8 / GB2312
+- **图片查看器** — 目前仅支持 BMP
 - **设置** — 亮度、音量、主题、熄屏、重启、LCD 测试
 - **中日韩字体**（Vonwaon 12px）
 - **PC 模拟器**（可选）— 桌面端 UI 开发，见 [launcher/sim/README.md](launcher/sim/README.md)
@@ -50,50 +48,3 @@ idf.py flash monitor
 | [launcher/sim/README.md](launcher/sim/README.md) | PC Simulator 构建、按键、testdata                                 |
 
 [↑ 回到顶部](#esplay-neo-firmware)
-
----
-
-## English
-
-Firmware for **ESPlay Micro** — SD card file browser, audio/text preview, and system settings. Forked from [pebri86/esplay-retro-emulation](https://github.com/pebri86/esplay-retro-emulation).
-
-> **See [AGENTS.md](AGENTS.md) for the authoritative project scope and dev constraints** (features, removed modules, build notes, PC Simulator). This README is a quick start only; upstream docs on AppFS, WiFi file transfer, and multi-app `.app` packages are **out of date**.
-
-### Features
-
-- **Files** — browse SD card, virtual scroll, delete
-- **Preview** — WAV/MP3 and text (UTF-8 / GB2312) in the file manager
-- **Settings** — brightness, volume, theme, screen off, reboot, LCD test
-- **CJK font** (Vonwaon 12px)
-- **PC Simulator** (optional) — desktop UI development; see [launcher/sim/README.md](launcher/sim/README.md)
-
-**Not included**: AppFS multi-app, WiFi / HTTP ROM upload, standalone Music page (see [AGENTS.md](AGENTS.md)).
-
-### Build
-
-**Requirements**: ESP-IDF **v5.5.x** (v5.5.4 recommended), target **ESPlay Micro**.
-
-```shell
-# Clone (with submodules)
-git clone --recurse-submodules git@github.com:canwdev/esplay-neo-firmware.git
-cd esplay-neo-firmware
-
-# ESP-IDF: install + export (official docs)
-# https://github.com/espressif/esp-idf/releases/tag/v5.5.4
-
-# Build & flash
-cd launcher
-idf.py build
-idf.py flash monitor
-```
-
-For faster UI iteration, flash app only: `idf.py app-flash monitor` (details in [AGENTS.md](AGENTS.md)).
-
-### Docs
-
-| File                                             | Description                                                               |
-| ------------------------------------------------ | ------------------------------------------------------------------------- |
-| [AGENTS.md](AGENTS.md)                           | **Main doc** — scope, features, partitions, build, conventions, Simulator |
-| [launcher/sim/README.md](launcher/sim/README.md) | PC Simulator build, keys, testdata                                        |
-
-[↑ Back to top](#esplay-neo-firmware)
