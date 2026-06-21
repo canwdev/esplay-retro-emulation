@@ -4,6 +4,7 @@
 #include "input_repeat.h"
 #include "input_bridge.h"
 #include "preview.h"
+#include "preview_audio.h"
 #include "platform_log.h"
 #include "platform_mem.h"
 #include "ui_app.h"
@@ -450,7 +451,6 @@ static int fm_logical_index_by_name(const char *name) {
 }
 
 static void fm_go_home(void) {
-  hal_audio_stop();
   input_bridge_block_enter_until_release();
   ui_home_create();
 }
@@ -869,6 +869,7 @@ static void fm_prompt_delete(const char *fullpath) {
 static void fm_open_preview(const char *fullpath) {
   fm_remember_focus();
   const char *selected_name = fm_base_name(fullpath);
+  bool is_audio = fm_is_playable_audio_filename(selected_name);
   fm_preview_filter_fn filter = fm_preview_filter_for_name(selected_name);
   char *shared_names = NULL;
   int shared_count = 0;
@@ -896,9 +897,18 @@ static void fm_open_preview(const char *fullpath) {
   if (preview_open_for_path(fullpath, &args)) {
     g_ui.current_page = PAGE_FILES;
   } else {
-    platform_free(shared_names);
-    /* If preview fails to open, restore file manager memory. */
-    fm_create();
+    bool retried_without_music = false;
+    if (!is_audio && preview_audio_session_is_active()) {
+      preview_audio_stop_session();
+      retried_without_music = preview_open_for_path(fullpath, &args);
+      if (retried_without_music)
+        g_ui.current_page = PAGE_FILES;
+    }
+    if (!retried_without_music) {
+      platform_free(shared_names);
+      /* If preview fails to open, restore file manager memory. */
+      fm_create();
+    }
   }
 }
 
@@ -1078,8 +1088,6 @@ void fm_handle_back(void) {
     fm_create();
     return;
   }
-
-  hal_audio_stop();
   fm_go_home();
 }
 

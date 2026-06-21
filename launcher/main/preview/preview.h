@@ -29,6 +29,7 @@ bool preview_can_open(const char *path);
 bool preview_open_for_path(const char *path, preview_open_args_t *args);
 void preview_close(void);
 bool preview_is_active(void);
+void preview_set_active(const preview_app_t *app);
 bool preview_on_key(const input_gamepad_state *gp, const bool edge[]);
 void preview_on_timer(void);
 const char *preview_current_path(void);

@@ -1,7 +1,9 @@
 #include "ui_home.h"
 #include "file_manager.h"
+#include "preview_audio.h"
 #include "hal_display.h"
 #include "platform_log.h"
+#include "preview.h"
 #include "ui_app.h"
 #include "ui_chrome.h"
 #include "ui_font.h"
@@ -14,14 +16,19 @@ static const char *TAG = "ui_home";
 
 typedef enum {
   HOME_TILE_FILES = 0,
-  HOME_TILE_SETTINGS = 1,
+  HOME_TILE_MUSIC = 1,
+  HOME_TILE_SETTINGS = 2,
 } home_tile_t;
 
 static ui_chrome_t s_chrome;
 static home_tile_t s_last_home_tile = HOME_TILE_FILES;
 
 static const char *home_tile_title(home_tile_t tile) {
-  return tile == HOME_TILE_SETTINGS ? "Settings" : "File Manager";
+  if (tile == HOME_TILE_MUSIC)
+    return "Music Player";
+  if (tile == HOME_TILE_SETTINGS)
+    return "Settings";
+  return "File Manager";
 }
 
 static void home_update_selected_label(lv_obj_t *obj) {
@@ -29,6 +36,8 @@ static void home_update_selected_label(lv_obj_t *obj) {
     return;
   if (obj == g_ui.home_btn_files)
     lv_label_set_text(g_ui.menu_selected_label, home_tile_title(HOME_TILE_FILES));
+  else if (obj == g_ui.home_btn_music)
+    lv_label_set_text(g_ui.menu_selected_label, home_tile_title(HOME_TILE_MUSIC));
   else if (obj == g_ui.home_btn_settings)
     lv_label_set_text(g_ui.menu_selected_label, home_tile_title(HOME_TILE_SETTINGS));
 }
@@ -49,6 +58,8 @@ static void btn_event_handler(lv_event_t *e) {
   if (code == LV_EVENT_FOCUSED) {
     if (obj == g_ui.home_btn_files)
       s_last_home_tile = HOME_TILE_FILES;
+    else if (obj == g_ui.home_btn_music)
+      s_last_home_tile = HOME_TILE_MUSIC;
     else if (obj == g_ui.home_btn_settings)
       s_last_home_tile = HOME_TILE_SETTINGS;
     else
@@ -59,6 +70,11 @@ static void btn_event_handler(lv_event_t *e) {
       platform_log(PLATFORM_LOG_INFO, TAG, "enter Files");
       fm_reset_cwd();
       fm_create();
+    } else if (obj == g_ui.home_btn_music) {
+      if (preview_audio_restore_foreground(g_ui.screen, g_ui.input_group)) {
+        platform_log(PLATFORM_LOG_INFO, TAG, "restore Music");
+        g_ui.current_page = PAGE_FILES;
+      }
     } else if (obj == g_ui.home_btn_settings) {
       platform_log(PLATFORM_LOG_INFO, TAG, "enter Settings");
       ui_settings_create();
@@ -127,16 +143,23 @@ void ui_home_create(void) {
   lv_obj_set_style_border_width(row, 0, 0);
 
   g_ui.home_btn_files = create_home_tile(row, LV_SYMBOL_SD_CARD);
+  g_ui.home_btn_music = NULL;
+  if (preview_audio_session_is_active())
+    g_ui.home_btn_music = create_home_tile(row, LV_SYMBOL_AUDIO);
   g_ui.home_btn_settings = create_home_tile(row, LV_SYMBOL_SETTINGS);
 
   if (g_ui.home_btn_files)
     lv_group_add_obj(g_ui.input_group, g_ui.home_btn_files);
+  if (g_ui.home_btn_music)
+    lv_group_add_obj(g_ui.input_group, g_ui.home_btn_music);
   if (g_ui.home_btn_settings)
     lv_group_add_obj(g_ui.input_group, g_ui.home_btn_settings);
 
-  lv_obj_t *focus_btn = (s_last_home_tile == HOME_TILE_SETTINGS)
-                            ? g_ui.home_btn_settings
-                            : g_ui.home_btn_files;
+  lv_obj_t *focus_btn = g_ui.home_btn_files;
+  if (s_last_home_tile == HOME_TILE_MUSIC && g_ui.home_btn_music)
+    focus_btn = g_ui.home_btn_music;
+  else if (s_last_home_tile == HOME_TILE_SETTINGS)
+    focus_btn = g_ui.home_btn_settings;
   if (focus_btn) {
     lv_group_focus_obj(focus_btn);
     home_update_selected_label(focus_btn);

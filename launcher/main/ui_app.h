@@ -14,6 +14,7 @@ typedef struct {
   lv_group_t *input_group;
   lv_obj_t *screen;
   lv_obj_t *home_btn_files;
+  lv_obj_t *home_btn_music;
   lv_obj_t *home_btn_settings;
   lv_obj_t *menu_selected_label;
   lv_indev_t *input_device;

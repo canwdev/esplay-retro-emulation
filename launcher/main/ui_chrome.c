@@ -4,6 +4,7 @@
 #include "hal_display.h"
 #include "hal_power.h"
 #include "lvgl.h"
+#include <stdbool.h>
 
 #define UI_CHROME_BAR_H    16
 #define UI_CHROME_GAP      2
@@ -12,6 +13,8 @@
 #define UI_CHROME_TITLE_W  (HAL_DISPLAY_WIDTH - UI_CHROME_PAD_HOR - UI_CHROME_SIDE_W * 2)
 
 static lv_obj_t *s_active_battery;
+static lv_obj_t *s_active_music_label;
+static bool s_music_active;
 
 static void ui_chrome_battery_symbol(const hal_battery_t *bat, char *out,
                                      size_t out_sz) {
@@ -51,11 +54,12 @@ ui_chrome_t ui_chrome_create(lv_obj_t *parent, const char *title) {
   lv_obj_set_style_border_width(bar, 0, 0);
   lv_obj_remove_flag(bar, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
-  lv_obj_t *left = lv_obj_create(bar);
-  lv_obj_remove_style_all(left);
-  lv_obj_set_size(left, UI_CHROME_SIDE_W, UI_CHROME_BAR_H);
-  lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(left, 0, 0);
+  lv_obj_t *left = lv_label_create(bar);
+  lv_obj_set_width(left, UI_CHROME_SIDE_W);
+  lv_obj_set_style_text_align(left, LV_TEXT_ALIGN_LEFT, 0);
+  ui_theme_style_label_secondary(left);
+  lv_obj_set_style_text_font(left, ui_font_builtin(), 0);
+  lv_label_set_text(left, s_music_active ? LV_SYMBOL_AUDIO : "");
 
   chrome.title_label = lv_label_create(bar);
   lv_label_set_text(chrome.title_label, title ? title : "");
@@ -68,6 +72,7 @@ ui_chrome_t ui_chrome_create(lv_obj_t *parent, const char *title) {
   ui_theme_style_label_secondary(chrome.battery_label);
   lv_obj_set_style_text_font(chrome.battery_label, ui_font_builtin(), 0);
 
+  s_active_music_label = left;
   s_active_battery = chrome.battery_label;
   ui_chrome_update_battery();
 
@@ -80,7 +85,22 @@ void ui_chrome_set_title(ui_chrome_t *chrome, const char *title) {
   lv_label_set_text(chrome->title_label, title ? title : "");
 }
 
+void ui_chrome_set_music_active(bool active) {
+  s_music_active = active;
+  if (!s_active_music_label || !lv_obj_is_valid(s_active_music_label))
+    return;
+  lv_label_set_text(s_active_music_label, active ? LV_SYMBOL_AUDIO : "");
+}
+
 void ui_chrome_detach(ui_chrome_t *chrome) {
+  if (chrome && chrome->title_label && lv_obj_is_valid(chrome->title_label)) {
+    lv_obj_t *bar = lv_obj_get_parent(chrome->title_label);
+    if (bar && lv_obj_is_valid(bar) && lv_obj_get_child_cnt(bar) > 0) {
+      lv_obj_t *left = lv_obj_get_child(bar, 0);
+      if (left == s_active_music_label)
+        s_active_music_label = NULL;
+    }
+  }
   if (chrome && chrome->battery_label == s_active_battery)
     s_active_battery = NULL;
   if (chrome) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lvgl.h"
+#include <stdbool.h>
 
 typedef struct {
   lv_obj_t *title_label;
@@ -14,6 +15,7 @@ lv_coord_t ui_chrome_body_top(void);
 ui_chrome_t ui_chrome_create(lv_obj_t *parent, const char *title);
 
 void ui_chrome_set_title(ui_chrome_t *chrome, const char *title);
+void ui_chrome_set_music_active(bool active);
 
 /** Call before destroying the parent screen/widgets. */
 void ui_chrome_detach(ui_chrome_t *chrome);

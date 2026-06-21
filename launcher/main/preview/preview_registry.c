@@ -41,6 +41,8 @@ void preview_close(void) {
 
 bool preview_is_active(void) { return s_active != NULL; }
 
+void preview_set_active(const preview_app_t *app) { s_active = app; }
+
 bool preview_on_key(const input_gamepad_state *gp, const bool edge[]) {
   if (!s_active || !s_active->on_key)
     return false;

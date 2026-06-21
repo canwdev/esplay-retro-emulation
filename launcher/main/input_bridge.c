@@ -82,8 +82,8 @@ static void input_poll_timer_cb(lv_timer_t *t) {
     edge[i] = input_edge(&gp, i);
 
   if (preview_is_active()) {
-    preview_on_key(&gp, edge);
-    if (edge[GAMEPAD_INPUT_B])
+    bool handled = preview_on_key(&gp, edge);
+    if (!handled && edge[GAMEPAD_INPUT_B])
       fm_handle_back();
     preview_on_timer();
     s_last = gp;
