@@ -107,7 +107,23 @@ static void input_poll_timer_cb(lv_timer_t *t) {
   if (g_ui.current_page == PAGE_FILES && edge[GAMEPAD_INPUT_MENU])
     fm_handle_menu_on_focus();
 
-  if (fm_uses_direct_nav()) {
+  if (ui_settings_uses_direct_nav()) {
+    if (edge[GAMEPAD_INPUT_UP])
+      ui_settings_on_nav_key(LV_KEY_UP);
+    else if (edge[GAMEPAD_INPUT_DOWN])
+      ui_settings_on_nav_key(LV_KEY_DOWN);
+    else if (edge[GAMEPAD_INPUT_LEFT])
+      ui_settings_on_nav_key(LV_KEY_LEFT);
+    else if (edge[GAMEPAD_INPUT_RIGHT])
+      ui_settings_on_nav_key(LV_KEY_RIGHT);
+    else
+      ui_settings_on_nav_hold_tick(gp.values[GAMEPAD_INPUT_UP] == 1,
+                                   gp.values[GAMEPAD_INPUT_DOWN] == 1,
+                                   gp.values[GAMEPAD_INPUT_LEFT] == 1,
+                                   gp.values[GAMEPAD_INPUT_RIGHT] == 1);
+    if (edge[GAMEPAD_INPUT_A])
+      ui_settings_on_nav_key(LV_KEY_ENTER);
+  } else if (fm_uses_direct_nav()) {
     if (edge[GAMEPAD_INPUT_UP])
       fm_on_nav_key(LV_KEY_UP);
     else if (edge[GAMEPAD_INPUT_DOWN])
@@ -168,6 +184,9 @@ void input_bridge_lvgl_read(lv_indev_t *indev, lv_indev_data_t *data) {
     return;
 
   if (ui_screen_test_is_active())
+    return;
+
+  if (ui_settings_uses_direct_nav())
     return;
 
   if (fm_uses_direct_nav())

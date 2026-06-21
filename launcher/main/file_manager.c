@@ -1,6 +1,7 @@
 #include "file_manager.h"
 #include "hal_audio.h"
 #include "hal_storage.h"
+#include "input_repeat.h"
 #include "input_bridge.h"
 #include "preview.h"
 #include "platform_log.h"
@@ -35,13 +36,12 @@ static const char *TAG = "file_manager";
 #define FM_HEADER_BOTTOM   36
 /* Height reserved at the bottom for the file size label. */
 #define FM_STATUS_H        18
-/* Long-press auto-scroll timing (ms). */
-#define FM_HOLD_MS_INITIAL 400
-#define FM_HOLD_MS_REPEAT  80
 /* Delay before a focused long filename starts horizontal scrolling. */
 #define FM_FOCUS_SCROLL_DELAY_MS 600
 /* Approximate bytes that fit in the path label on a 320px display. */
 #define FM_PATH_LABEL_BYTES 36
+#define FM_NAV_ACCEL_EVERY  4
+#define FM_NAV_MAX_SCALE    4
 
 typedef struct {
   lv_obj_t *btn;
@@ -71,11 +71,16 @@ static bool s_show_back;   /* "Back" row — root (/sd) only              */
 static bool s_show_up;     /* ".." row — subdirectories only            */
 static ui_chrome_t s_chrome;
 static bool s_open_err;
-static bool s_hold_armed;
-static uint32_t s_hold_dir;
-static uint32_t s_hold_next_ms;
+static input_repeat_state_t s_nav_repeat;
 static bool s_focus_scroll_active;
 static uint32_t s_focus_scroll_due_ms;
+
+static const input_repeat_config_t s_fm_nav_repeat = {
+    .initial_delay_ms = 400,
+    .repeat_delay_ms = 80,
+    .accel_every = FM_NAV_ACCEL_EVERY,
+    .max_scale = FM_NAV_MAX_SCALE,
+};
 
 static void fm_prompt_delete(const char *fullpath);
 static void fm_show_context_menu(const char *fullpath);
@@ -480,9 +485,7 @@ static void fm_move_focus(int delta) {
 }
 
 static void fm_hold_reset(void) {
-  s_hold_armed = false;
-  s_hold_dir   = 0;
-  s_hold_next_ms = 0;
+  input_repeat_reset(&s_nav_repeat);
 }
 
 static void fm_remember_focus(void) {
@@ -972,24 +975,19 @@ void fm_on_nav_key(uint32_t key) {
 
   if (key == LV_KEY_UP) {
     fm_move_focus(-1);
-    s_hold_armed   = true;
-    s_hold_dir     = LV_KEY_UP;
-    s_hold_next_ms = lv_tick_get() + FM_HOLD_MS_INITIAL;
+    input_repeat_arm(&s_nav_repeat, LV_KEY_UP, lv_tick_get(), &s_fm_nav_repeat);
   } else if (key == LV_KEY_DOWN) {
     fm_move_focus(1);
-    s_hold_armed   = true;
-    s_hold_dir     = LV_KEY_DOWN;
-    s_hold_next_ms = lv_tick_get() + FM_HOLD_MS_INITIAL;
+    input_repeat_arm(&s_nav_repeat, LV_KEY_DOWN, lv_tick_get(),
+                     &s_fm_nav_repeat);
   } else if (key == LV_KEY_LEFT) {
     fm_move_focus(-s_visible_rows);
-    s_hold_armed   = true;
-    s_hold_dir     = LV_KEY_LEFT;
-    s_hold_next_ms = lv_tick_get() + FM_HOLD_MS_INITIAL;
+    input_repeat_arm(&s_nav_repeat, LV_KEY_LEFT, lv_tick_get(),
+                     &s_fm_nav_repeat);
   } else if (key == LV_KEY_RIGHT) {
     fm_move_focus(s_visible_rows);
-    s_hold_armed   = true;
-    s_hold_dir     = LV_KEY_RIGHT;
-    s_hold_next_ms = lv_tick_get() + FM_HOLD_MS_INITIAL;
+    input_repeat_arm(&s_nav_repeat, LV_KEY_RIGHT, lv_tick_get(),
+                     &s_fm_nav_repeat);
   } else if (key == LV_KEY_ENTER) {
     const char *name = NULL;
     const char *sym  = NULL;
@@ -1017,23 +1015,17 @@ void fm_on_nav_hold_tick(bool up, bool down, bool left, bool right) {
   if (left)  dir = LV_KEY_LEFT;
   if (right) dir = LV_KEY_RIGHT;
 
-  if (!s_hold_armed || s_hold_dir != dir) {
-    s_hold_armed   = true;
-    s_hold_dir     = dir;
-    s_hold_next_ms = lv_tick_get() + FM_HOLD_MS_INITIAL;
-    return;
-  }
-
   uint32_t now = lv_tick_get();
-  if (now < s_hold_next_ms)
+  uint16_t repeat_count = 0;
+  if (!input_repeat_tick(&s_nav_repeat, true, dir, now, &s_fm_nav_repeat,
+                         &repeat_count))
     return;
 
-  if (dir == LV_KEY_UP)         fm_move_focus(-1);
-  else if (dir == LV_KEY_DOWN)  fm_move_focus(1);
-  else if (dir == LV_KEY_LEFT)  fm_move_focus(-s_visible_rows);
-  else if (dir == LV_KEY_RIGHT) fm_move_focus(s_visible_rows);
-
-  s_hold_next_ms = now + FM_HOLD_MS_REPEAT;
+  int scale = input_repeat_scale_for_count(&s_fm_nav_repeat, repeat_count);
+  if (dir == LV_KEY_UP)         fm_move_focus(-scale);
+  else if (dir == LV_KEY_DOWN)  fm_move_focus(scale);
+  else if (dir == LV_KEY_LEFT)  fm_move_focus(-s_visible_rows * scale);
+  else if (dir == LV_KEY_RIGHT) fm_move_focus(s_visible_rows * scale);
 }
 
 bool fm_uses_direct_nav(void) {

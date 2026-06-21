@@ -5,6 +5,7 @@
 #include "hal_settings.h"
 #include "hal_storage.h"
 #include "hal_system.h"
+#include "input_repeat.h"
 #include "platform_log.h"
 #include "ui_app.h"
 #include "ui_backlight.h"
@@ -48,6 +49,28 @@ static int32_t s_volume = 50;
 static int32_t s_theme = 0;
 static int32_t s_backlight_timeout = 30;
 static ui_chrome_t s_chrome;
+static input_repeat_state_t s_nav_repeat;
+
+static const input_repeat_config_t s_settings_nav_repeat = {
+    .initial_delay_ms = 400,
+    .repeat_delay_ms = 80,
+    .accel_every = 4,
+    .max_scale = 4,
+};
+
+static const input_repeat_config_t s_settings_adjust_repeat = {
+    .initial_delay_ms = 400,
+    .repeat_delay_ms = 80,
+    .accel_every = 4,
+    .max_scale = 4,
+};
+
+static const input_repeat_config_t s_settings_discrete_repeat = {
+    .initial_delay_ms = 400,
+    .repeat_delay_ms = 80,
+    .accel_every = 0,
+    .max_scale = 1,
+};
 
 static void settings_save_backlight_timeout(void) {
   hal_settings_save(SettingBacklightTimeout, s_backlight_timeout);
@@ -90,6 +113,132 @@ static void settings_update_row_labels(void) {
                             "Screen Off: %lds",
                             (long)s_backlight_timeout);
   }
+}
+
+static lv_obj_t *settings_focused_obj(void) {
+  return g_ui.input_group ? lv_group_get_focused(g_ui.input_group) : NULL;
+}
+
+static settings_row_t settings_row_from_obj(lv_obj_t *obj) {
+  for (int i = 0; i < ROW_COUNT; i++) {
+    if (s_row_btns[i] == obj)
+      return (settings_row_t)i;
+  }
+  return ROW_COUNT;
+}
+
+static void settings_sync_focus_row_from_obj(lv_obj_t *obj) {
+  settings_row_t row = settings_row_from_obj(obj);
+  if (row != ROW_COUNT)
+    s_focus_row = row;
+}
+
+static const input_repeat_config_t *settings_adjust_repeat_for_obj(lv_obj_t *obj) {
+  settings_row_t row = settings_row_from_obj(obj);
+  if (row == ROW_BRIGHTNESS || row == ROW_VOLUME)
+    return &s_settings_adjust_repeat;
+  if (row == ROW_THEME || row == ROW_BACKLIGHT_TIMEOUT)
+    return &s_settings_discrete_repeat;
+  return NULL;
+}
+
+static void settings_focus_move(int delta) {
+  if (!g_ui.input_group || delta == 0)
+    return;
+  int steps = delta > 0 ? delta : -delta;
+  while (steps-- > 0) {
+    if (delta > 0)
+      lv_group_focus_next(g_ui.input_group);
+    else
+      lv_group_focus_prev(g_ui.input_group);
+  }
+  settings_sync_focus_row_from_obj(settings_focused_obj());
+}
+
+static void settings_adjust_timeout(int delta) {
+  if (delta == 0)
+    return;
+  int cur_idx = -1;
+  for (int i = 0; i < s_timeout_options_count; i++) {
+    if (s_timeout_options[i] == s_backlight_timeout) {
+      cur_idx = i;
+      break;
+    }
+  }
+  if (cur_idx < 0)
+    cur_idx = 0;
+  if (delta > 0)
+    cur_idx = (cur_idx + 1) % s_timeout_options_count;
+  else
+    cur_idx = (cur_idx + s_timeout_options_count - 1) % s_timeout_options_count;
+  s_backlight_timeout = s_timeout_options[cur_idx];
+  settings_save_backlight_timeout();
+  ui_backlight_set_timeout(s_backlight_timeout);
+  settings_update_row_labels();
+}
+
+static bool settings_adjust_obj(lv_obj_t *obj, int delta, int scale) {
+  settings_row_t row = settings_row_from_obj(obj);
+  if (row == ROW_COUNT || delta == 0)
+    return false;
+  if (scale < 1)
+    scale = 1;
+
+  if (row == ROW_BRIGHTNESS) {
+    s_brightness += delta * scale;
+    if (s_brightness < 1)
+      s_brightness = 1;
+    if (s_brightness > 100)
+      s_brightness = 100;
+    settings_save_brightness();
+    settings_update_row_labels();
+    return true;
+  }
+  if (row == ROW_VOLUME) {
+    s_volume += delta * scale;
+    if (s_volume < 0)
+      s_volume = 0;
+    if (s_volume > 100)
+      s_volume = 100;
+    settings_save_volume();
+    settings_update_row_labels();
+    return true;
+  }
+  if (row == ROW_THEME) {
+    if (delta > 0)
+      s_theme = (s_theme + 1) % UI_THEME_COUNT;
+    else
+      s_theme = (s_theme + UI_THEME_COUNT - 1) % UI_THEME_COUNT;
+    settings_save_theme();
+    settings_update_row_labels();
+    ui_settings_create();
+    return true;
+  }
+  if (row == ROW_BACKLIGHT_TIMEOUT) {
+    settings_adjust_timeout(delta);
+    return true;
+  }
+  return false;
+}
+
+static bool settings_activate_obj(lv_obj_t *obj) {
+  settings_row_t row = settings_row_from_obj(obj);
+  if (row == ROW_BACK) {
+    ui_home_create();
+    return true;
+  }
+  if (row == ROW_RESTART) {
+    hal_system_reboot();
+    return true;
+  }
+  if (row == ROW_SCREEN_TEST) {
+    s_focus_row = ROW_SCREEN_TEST;
+    if (s_scroll)
+      s_scroll_y = lv_obj_get_scroll_y(s_scroll);
+    ui_screen_test_open();
+    return true;
+  }
+  return false;
 }
 
 #define SETTINGS_ROW_H 24
@@ -180,6 +329,7 @@ static void settings_row_event_handler(lv_event_t *e) {
   lv_obj_t *obj = lv_event_get_target(e);
 
   if (code == LV_EVENT_FOCUSED) {
+    settings_sync_focus_row_from_obj(obj);
     if (lv_obj_check_type(obj, &lv_button_class))
       settings_row_apply_focus(obj, true);
     else
@@ -197,58 +347,15 @@ static void settings_row_event_handler(lv_event_t *e) {
   if (code == LV_EVENT_KEY) {
     uint32_t key = lv_indev_get_key(lv_indev_get_act());
     if (key == LV_KEY_DOWN) {
-      if (g_ui.input_group)
-        lv_group_focus_next(g_ui.input_group);
+      settings_focus_move(1);
       return;
     }
     if (key == LV_KEY_UP) {
-      if (g_ui.input_group)
-        lv_group_focus_prev(g_ui.input_group);
+      settings_focus_move(-1);
       return;
     }
     if (key == LV_KEY_LEFT || key == LV_KEY_RIGHT) {
-      int delta = (key == LV_KEY_RIGHT) ? 1 : -1;
-      if (obj == s_row_btns[ROW_BRIGHTNESS]) {
-        s_brightness += delta;
-        if (s_brightness < 1)
-          s_brightness = 1;
-        if (s_brightness > 100)
-          s_brightness = 100;
-        settings_save_brightness();
-        settings_update_row_labels();
-      } else if (obj == s_row_btns[ROW_VOLUME]) {
-        s_volume += delta;
-        if (s_volume < 0)
-          s_volume = 0;
-        if (s_volume > 100)
-          s_volume = 100;
-        settings_save_volume();
-        settings_update_row_labels();
-      } else if (obj == s_row_btns[ROW_THEME]) {
-        if (key == LV_KEY_RIGHT)
-          s_theme = (s_theme + 1) % UI_THEME_COUNT;
-        else
-          s_theme = (s_theme + UI_THEME_COUNT - 1) % UI_THEME_COUNT;
-        settings_save_theme();
-        settings_update_row_labels();
-        ui_settings_create();
-      } else if (obj == s_row_btns[ROW_BACKLIGHT_TIMEOUT]) {
-        int cur_idx = -1;
-        for (int i = 0; i < s_timeout_options_count; i++) {
-          if (s_timeout_options[i] == s_backlight_timeout) {
-            cur_idx = i;
-            break;
-          }
-        }
-        if (key == LV_KEY_RIGHT)
-          cur_idx = (cur_idx + 1) % s_timeout_options_count;
-        else
-          cur_idx = (cur_idx + s_timeout_options_count - 1) % s_timeout_options_count;
-        s_backlight_timeout = s_timeout_options[cur_idx];
-        settings_save_backlight_timeout();
-        ui_backlight_set_timeout(s_backlight_timeout);
-        settings_update_row_labels();
-      }
+      settings_adjust_obj(obj, (key == LV_KEY_RIGHT) ? 1 : -1, 1);
     }
     return;
   }
@@ -256,16 +363,7 @@ static void settings_row_event_handler(lv_event_t *e) {
   if (code != LV_EVENT_CLICKED)
     return;
 
-  if (obj == s_row_btns[ROW_BACK])
-    ui_home_create();
-  else if (obj == s_row_btns[ROW_RESTART])
-    hal_system_reboot();
-  else if (obj == s_row_btns[ROW_SCREEN_TEST]) {
-    s_focus_row = ROW_SCREEN_TEST;
-    if (s_scroll)
-      s_scroll_y = lv_obj_get_scroll_y(s_scroll);
-    ui_screen_test_open();
-  }
+  settings_activate_obj(obj);
 }
 
 static void settings_add_info_block(lv_obj_t *parent, const char *title,
@@ -320,6 +418,7 @@ void ui_settings_detach_ui(void) {
   memset(s_row_btns, 0, sizeof(s_row_btns));
   memset(s_row_labels, 0, sizeof(s_row_labels));
   s_scroll = NULL;
+  input_repeat_reset(&s_nav_repeat);
 }
 
 void ui_settings_load_persisted(void) {
@@ -355,19 +454,22 @@ void ui_settings_create(void) {
     return;
   }
 
+  settings_row_t restore_focus_row = s_focus_row;
+  lv_coord_t restore_scroll_y = s_scroll_y;
+
   if (g_ui.current_page == PAGE_SETTINGS) {
     lv_obj_t *focused = lv_group_get_focused(g_ui.input_group);
     for (int i = 0; i < ROW_COUNT; i++) {
       if (focused == s_row_btns[i]) {
-        s_focus_row = (settings_row_t)i;
+        restore_focus_row = (settings_row_t)i;
         break;
       }
     }
     if (s_scroll)
-      s_scroll_y = lv_obj_get_scroll_y(s_scroll);
+      restore_scroll_y = lv_obj_get_scroll_y(s_scroll);
   } else if (g_ui.current_page != PAGE_SCREEN_TEST) {
-    s_focus_row = ROW_BRIGHTNESS;
-    s_scroll_y = 0;
+    restore_focus_row = ROW_BRIGHTNESS;
+    restore_scroll_y = 0;
   }
 
   lv_group_remove_all_objs(g_ui.input_group);
@@ -479,10 +581,96 @@ void ui_settings_create(void) {
   ui_theme_style_label_secondary(hint);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -2);
 
-  lv_obj_scroll_to_y(scroll, s_scroll_y, LV_ANIM_OFF);
-  if (s_row_btns[s_focus_row])
-    lv_group_focus_obj(s_row_btns[s_focus_row]);
+  lv_obj_scroll_to_y(scroll, restore_scroll_y, LV_ANIM_OFF);
+  if (restore_focus_row >= 0 && restore_focus_row < ROW_COUNT &&
+      s_row_btns[restore_focus_row]) {
+    lv_group_focus_obj(s_row_btns[restore_focus_row]);
+    s_focus_row = restore_focus_row;
+  }
+  s_scroll_y = restore_scroll_y;
   g_ui.current_page = PAGE_SETTINGS;
 }
 
 void ui_settings_handle_back(void) { ui_home_create(); }
+
+void ui_settings_on_nav_key(uint32_t lv_key) {
+  if (g_ui.current_page != PAGE_SETTINGS)
+    return;
+
+  lv_obj_t *obj = settings_focused_obj();
+  if (lv_key == LV_KEY_UP) {
+    settings_focus_move(-1);
+    input_repeat_arm(&s_nav_repeat, LV_KEY_UP, lv_tick_get(),
+                     &s_settings_nav_repeat);
+    return;
+  }
+  if (lv_key == LV_KEY_DOWN) {
+    settings_focus_move(1);
+    input_repeat_arm(&s_nav_repeat, LV_KEY_DOWN, lv_tick_get(),
+                     &s_settings_nav_repeat);
+    return;
+  }
+  if (lv_key == LV_KEY_LEFT || lv_key == LV_KEY_RIGHT) {
+    const input_repeat_config_t *config = settings_adjust_repeat_for_obj(obj);
+    if (!config)
+      return;
+    settings_adjust_obj(obj, (lv_key == LV_KEY_RIGHT) ? 1 : -1, 1);
+    input_repeat_arm(&s_nav_repeat, lv_key, lv_tick_get(), config);
+    return;
+  }
+  if (lv_key == LV_KEY_ENTER)
+    settings_activate_obj(obj);
+}
+
+void ui_settings_on_nav_hold_tick(bool up, bool down, bool left, bool right) {
+  if (g_ui.current_page != PAGE_SETTINGS) {
+    input_repeat_reset(&s_nav_repeat);
+    return;
+  }
+
+  int held_count = (up ? 1 : 0) + (down ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
+  if (held_count != 1) {
+    input_repeat_reset(&s_nav_repeat);
+    return;
+  }
+
+  lv_obj_t *obj = settings_focused_obj();
+  uint32_t dir = 0;
+  const input_repeat_config_t *config = NULL;
+  if (up) {
+    dir = LV_KEY_UP;
+    config = &s_settings_nav_repeat;
+  } else if (down) {
+    dir = LV_KEY_DOWN;
+    config = &s_settings_nav_repeat;
+  } else if (left) {
+    dir = LV_KEY_LEFT;
+    config = settings_adjust_repeat_for_obj(obj);
+  } else if (right) {
+    dir = LV_KEY_RIGHT;
+    config = settings_adjust_repeat_for_obj(obj);
+  }
+
+  if (!config) {
+    input_repeat_reset(&s_nav_repeat);
+    return;
+  }
+
+  uint16_t repeat_count = 0;
+  if (!input_repeat_tick(&s_nav_repeat, true, dir, lv_tick_get(), config,
+                         &repeat_count))
+    return;
+
+  int scale = input_repeat_scale_for_count(config, repeat_count);
+  if (dir == LV_KEY_UP)
+    settings_focus_move(-scale);
+  else if (dir == LV_KEY_DOWN)
+    settings_focus_move(scale);
+  else
+    settings_adjust_obj(settings_focused_obj(),
+                        (dir == LV_KEY_RIGHT) ? 1 : -1, scale);
+}
+
+bool ui_settings_uses_direct_nav(void) {
+  return g_ui.current_page == PAGE_SETTINGS;
+}

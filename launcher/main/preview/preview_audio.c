@@ -2,6 +2,7 @@
 
 #include "audio.h"
 #include "file_manager.h"
+#include "input_repeat.h"
 #include "platform_log.h"
 #include "platform_mem.h"
 #include "platform_time.h"
@@ -43,8 +44,9 @@ static void preview_audio_wait_ms(uint32_t ms) {
 
 #define AUDIO_PLAYLIST_MAX 512
 #define AUDIO_PATH_MAX     256
-#define AUDIO_VOL_HOLD_MS_INITIAL 400
-#define AUDIO_VOL_HOLD_MS_REPEAT  80
+#define AUDIO_SEEK_STEP_SECONDS   5
+#define AUDIO_ADJUST_ACCEL_EVERY  4
+#define AUDIO_ADJUST_MAX_SCALE    4
 
 typedef enum {
   PLAY_MODE_LIST_LOOP = 0, /* wrap around at end of list  (default) */
@@ -94,10 +96,16 @@ static play_mode_t s_play_mode;
 /* Set true once the current track is confirmed playing; cleared on track end
  * or when a new track is started, to gate auto-advance triggering. */
 static bool s_track_confirmed_playing;
-static bool s_vol_hold_armed;
-static int8_t s_vol_hold_dir;
-static uint32_t s_vol_hold_next_ms;
+static input_repeat_state_t s_volume_repeat;
+static input_repeat_state_t s_seek_repeat;
 static const char *preview_audio_current_path(void);
+
+static const input_repeat_config_t s_audio_adjust_repeat = {
+    .initial_delay_ms = 400,
+    .repeat_delay_ms = 80,
+    .accel_every = AUDIO_ADJUST_ACCEL_EVERY,
+    .max_scale = AUDIO_ADJUST_MAX_SCALE,
+};
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -378,11 +386,6 @@ static void preview_audio_update_ui(bool force) {
   }
 }
 
-static void preview_audio_vol_hold_reset(void) {
-  s_vol_hold_armed = false;
-  s_vol_hold_dir   = 0;
-}
-
 static void preview_audio_apply_volume_delta(int delta) {
   if (delta == 0)
     return;
@@ -396,36 +399,58 @@ static void preview_audio_apply_volume_delta(int delta) {
   preview_audio_update_ui(true);
 }
 
-static void preview_audio_vol_hold_tick(const input_gamepad_state *gp) {
+static void preview_audio_apply_seek_delta(int delta_seconds) {
+  if (delta_seconds == 0)
+    return;
+  audio_seek_seconds(delta_seconds);
+  preview_audio_update_ui(true);
+}
+
+static void preview_audio_reset_adjust_repeats(void) {
+  input_repeat_reset(&s_volume_repeat);
+  input_repeat_reset(&s_seek_repeat);
+}
+
+static void preview_audio_volume_hold_tick(const input_gamepad_state *gp) {
   bool up   = gp->values[GAMEPAD_INPUT_UP] == 1;
   bool down = gp->values[GAMEPAD_INPUT_DOWN] == 1;
 
-  if ((up && down) || (!up && !down)) {
-    preview_audio_vol_hold_reset();
+  int held_count = (up ? 1 : 0) + (down ? 1 : 0);
+  if (held_count != 1) {
+    input_repeat_reset(&s_volume_repeat);
     return;
   }
 
-  int8_t dir = up ? 1 : -1;
   uint32_t now = lv_tick_get();
-
-  if (!s_vol_hold_armed || s_vol_hold_dir != dir) {
-    s_vol_hold_armed   = true;
-    s_vol_hold_dir     = dir;
-    s_vol_hold_next_ms = now + AUDIO_VOL_HOLD_MS_INITIAL;
+  uint32_t dir = up ? GAMEPAD_INPUT_UP : GAMEPAD_INPUT_DOWN;
+  uint16_t repeat_count = 0;
+  if (!input_repeat_tick(&s_volume_repeat, true, dir, now,
+                         &s_audio_adjust_repeat, &repeat_count))
     return;
-  }
-
-  if ((int32_t)(now - s_vol_hold_next_ms) < 0)
-    return;
-
-  preview_audio_apply_volume_delta(dir);
-  s_vol_hold_next_ms = now + AUDIO_VOL_HOLD_MS_REPEAT;
+  int scale = input_repeat_scale_for_count(&s_audio_adjust_repeat, repeat_count);
+  preview_audio_apply_volume_delta((up ? 1 : -1) * scale);
 }
 
-static void preview_audio_arm_volume_hold(int8_t dir) {
-  s_vol_hold_armed   = true;
-  s_vol_hold_dir     = dir;
-  s_vol_hold_next_ms = lv_tick_get() + AUDIO_VOL_HOLD_MS_INITIAL;
+static void preview_audio_seek_hold_tick(const input_gamepad_state *gp) {
+  bool left = gp->values[GAMEPAD_INPUT_LEFT] == 1;
+  bool right = gp->values[GAMEPAD_INPUT_RIGHT] == 1;
+
+  int held_count = (left ? 1 : 0) + (right ? 1 : 0);
+  if (held_count != 1) {
+    input_repeat_reset(&s_seek_repeat);
+    return;
+  }
+
+  uint32_t now = lv_tick_get();
+  uint32_t dir = right ? GAMEPAD_INPUT_RIGHT : GAMEPAD_INPUT_LEFT;
+  uint16_t repeat_count = 0;
+  if (!input_repeat_tick(&s_seek_repeat, true, dir, now,
+                         &s_audio_adjust_repeat, &repeat_count))
+    return;
+
+  int scale = input_repeat_scale_for_count(&s_audio_adjust_repeat, repeat_count);
+  int delta = AUDIO_SEEK_STEP_SECONDS * scale;
+  preview_audio_apply_seek_delta((right ? 1 : -1) * delta);
 }
 
 /* ------------------------------------------------------------------ playback */
@@ -599,7 +624,7 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   s_last_is_float = false;
   s_last_mp3_vbr = false;
   s_track_confirmed_playing = false;
-  preview_audio_vol_hold_reset();
+  preview_audio_reset_adjust_repeats();
 
   preview_audio_start_track(path);
 
@@ -627,7 +652,7 @@ static void preview_audio_close(void) {
   s_playlist_cwd[0] = '\0';
   s_playlist_from_shared = false;
   ui_chrome_detach(&s_chrome);
-  preview_audio_vol_hold_reset();
+  preview_audio_reset_adjust_repeats();
   s_active        = false;
   s_filename_label = NULL;
   s_tech_label    = NULL;
@@ -649,22 +674,26 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
 
   if (edge[GAMEPAD_INPUT_UP]) {
     preview_audio_apply_volume_delta(1);
-    preview_audio_arm_volume_hold(1);
+    input_repeat_arm(&s_volume_repeat, GAMEPAD_INPUT_UP, lv_tick_get(),
+                     &s_audio_adjust_repeat);
     return true;
   }
   if (edge[GAMEPAD_INPUT_DOWN]) {
     preview_audio_apply_volume_delta(-1);
-    preview_audio_arm_volume_hold(-1);
+    input_repeat_arm(&s_volume_repeat, GAMEPAD_INPUT_DOWN, lv_tick_get(),
+                     &s_audio_adjust_repeat);
     return true;
   }
   if (edge[GAMEPAD_INPUT_LEFT]) {
-    audio_seek_seconds(-5);
-    preview_audio_update_ui(true);
+    preview_audio_apply_seek_delta(-AUDIO_SEEK_STEP_SECONDS);
+    input_repeat_arm(&s_seek_repeat, GAMEPAD_INPUT_LEFT, lv_tick_get(),
+                     &s_audio_adjust_repeat);
     return true;
   }
   if (edge[GAMEPAD_INPUT_RIGHT]) {
-    audio_seek_seconds(5);
-    preview_audio_update_ui(true);
+    preview_audio_apply_seek_delta(AUDIO_SEEK_STEP_SECONDS);
+    input_repeat_arm(&s_seek_repeat, GAMEPAD_INPUT_RIGHT, lv_tick_get(),
+                     &s_audio_adjust_repeat);
     return true;
   }
   if (edge[GAMEPAD_INPUT_L]) {
@@ -702,7 +731,8 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     return true;
   }
 
-  preview_audio_vol_hold_tick(gp);
+  preview_audio_volume_hold_tick(gp);
+  preview_audio_seek_hold_tick(gp);
   (void)gp;
   return false;
 }

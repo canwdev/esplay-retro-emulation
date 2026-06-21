@@ -52,6 +52,7 @@ add_executable(launcher_sim
   ../main/ui_screen_test.c
   ../main/ui_backlight.c
   ../main/input_bridge.c
+  ../main/input_repeat.c
   ../main/file_manager.c
   ../main/preview/preview_registry.c
   ../main/preview/preview_text.c

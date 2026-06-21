@@ -10,6 +10,7 @@ idf_component_register(
         "ui_screen_test.c"
         "ui_backlight.c"
         "file_manager.c"
+        "input_repeat.c"
         "input_bridge.c"
         "preview/preview_registry.c"
         "preview/preview_text.c"
