@@ -34,12 +34,22 @@ static const char *TAG = "preview_audio";
 #define PREVIEW_AUDIO_LOGW(...) platform_log(PLATFORM_LOG_WARN, TAG, __VA_ARGS__)
 #define PREVIEW_AUDIO_LOGE(...) platform_log(PLATFORM_LOG_ERROR, TAG, __VA_ARGS__)
 
+static char *preview_audio_strdup(const char *s) {
+  if (!s)
+    return NULL;
+  size_t len = strlen(s);
+  char *d = malloc(len + 1);
+  if (d)
+    memcpy(d, s, len + 1);
+  return d;
+}
+
 static uint32_t preview_audio_random_u32(void) {
-#ifdef TARGET_SIM
-  return ((uint32_t)rand() << 16) ^ (uint32_t)rand();
-#else
-  return esp_random();
-#endif
+  #ifdef TARGET_SIM
+    return ((uint32_t)rand() << 16) ^ (uint32_t)rand();
+  #else
+    return esp_random();
+  #endif
 }
 
 static void preview_audio_wait_ms(uint32_t ms) {
@@ -60,7 +70,7 @@ typedef enum {
   PLAY_MODE_COUNT,
 } play_mode_t;
 
-static char (*s_playlist)[FM_NAME_LEN] = NULL;
+static char **s_playlist = NULL;
 static int  s_playlist_count;
 static int  s_current_index;
 static int  s_shuffle_order[AUDIO_PLAYLIST_MAX];
@@ -212,7 +222,19 @@ static bool preview_audio_can_open(const char *path) {
 /* ------------------------------------------------------------------ playlist */
 
 static int preview_playlist_compare(const void *a, const void *b) {
-  return strcasecmp((const char *)a, (const char *)b);
+  return strcasecmp(*(const char * const *)a, *(const char * const *)b);
+}
+
+static void preview_audio_free_playlist(void) {
+  if (s_playlist) {
+    for (int i = 0; i < s_playlist_count; i++) {
+      if (s_playlist[i]) {
+        free(s_playlist[i]);
+      }
+    }
+    free(s_playlist);
+    s_playlist = NULL;
+  }
 }
 
 static void preview_audio_shuffle_reset(int start_index) {
@@ -275,7 +297,7 @@ static int preview_audio_shuffle_step(int delta, bool restart_round) {
   return s_shuffle_order[s_shuffle_pos];
 }
 
-static void preview_audio_build_playlist(preview_open_args_t *args,
+static bool preview_audio_build_playlist(preview_open_args_t *args,
                                          const char *current) {
   s_playlist_count = 0;
   s_current_index  = 0;
@@ -287,20 +309,40 @@ static void preview_audio_build_playlist(preview_open_args_t *args,
     preview_audio_copy_dirname(current, s_playlist_cwd, sizeof(s_playlist_cwd));
 
   if (args->shared_names && args->shared_count > 0 && args->shared_name_stride == FM_NAME_LEN) {
-    s_playlist = (char (*)[FM_NAME_LEN])args->shared_names;
+    s_playlist = malloc((size_t)args->shared_count * sizeof(char *));
+    if (!s_playlist) {
+      PREVIEW_AUDIO_LOGE("Failed to allocate memory for s_playlist from shared");
+      platform_free((void *)args->shared_names);
+      args->shared_names = NULL;
+      return false;
+    }
+    for (int i = 0; i < args->shared_count; i++) {
+      const char *src = args->shared_names + (size_t)i * FM_NAME_LEN;
+      s_playlist[i] = preview_audio_strdup(src);
+    }
+    s_playlist_count = args->shared_count;
+    platform_free((void *)args->shared_names);
     args->shared_names = NULL;
     s_playlist_from_shared = true;
-    s_playlist_count = args->shared_count;
     s_current_index = args->shared_index >= 0 ? args->shared_index : 0;
     if (s_current_index >= s_playlist_count)
       s_current_index = 0;
     preview_audio_shuffle_reset(s_current_index);
-    return;
+    return true;
+  }
+
+  s_playlist = malloc(AUDIO_PLAYLIST_MAX * sizeof(char *));
+  if (!s_playlist) {
+    PREVIEW_AUDIO_LOGE("Failed to allocate memory for s_playlist");
+    return false;
   }
 
   DIR *dir = opendir(s_playlist_cwd);
-  if (!dir)
-    return;
+  if (!dir) {
+    free(s_playlist);
+    s_playlist = NULL;
+    return false;
+  }
 
   struct dirent *de;
   while ((de = readdir(dir)) != NULL && s_playlist_count < AUDIO_PLAYLIST_MAX) {
@@ -308,13 +350,15 @@ static void preview_audio_build_playlist(preview_open_args_t *args,
       continue;
     if (!fm_is_playable_audio_filename(de->d_name))
       continue;
-    strlcpy(s_playlist[s_playlist_count], de->d_name, FM_NAME_LEN);
-    s_playlist_count++;
+    s_playlist[s_playlist_count] = preview_audio_strdup(de->d_name);
+    if (s_playlist[s_playlist_count]) {
+      s_playlist_count++;
+    }
   }
   closedir(dir);
 
   if (s_playlist_count > 1)
-    qsort(s_playlist, s_playlist_count, FM_NAME_LEN, preview_playlist_compare);
+    qsort(s_playlist, s_playlist_count, sizeof(char *), preview_playlist_compare);
 
   const char *cur = fm_base_name(current);
   for (int i = 0; i < s_playlist_count; i++) {
@@ -325,6 +369,7 @@ static void preview_audio_build_playlist(preview_open_args_t *args,
   }
 
   preview_audio_shuffle_reset(s_current_index);
+  return true;
 }
 
 /* ------------------------------------------------------------------ UI update */
@@ -628,15 +673,9 @@ static bool preview_audio_prepare_session(const char *path, char *shared_names,
       .shared_name_stride = shared_name_stride,
   };
 
-  if (!args.shared_names) {
-    s_playlist = malloc(AUDIO_PLAYLIST_MAX * FM_NAME_LEN);
-    if (!s_playlist) {
-      PREVIEW_AUDIO_LOGE("Failed to allocate memory for s_playlist");
-      return false;
-    }
+  if (!preview_audio_build_playlist(&args, path)) {
+    return false;
   }
-
-  preview_audio_build_playlist(&args, path);
   s_session_active = true;
   s_track_confirmed_playing = false;
   ui_chrome_set_music_active(true);
@@ -795,13 +834,7 @@ static void preview_audio_close_foreground(void) {
 }
 
 static void preview_audio_reset_session_state(void) {
-  if (s_playlist) {
-    if (s_playlist_from_shared)
-      platform_free(s_playlist);
-    else
-      free(s_playlist);
-    s_playlist = NULL;
-  }
+  preview_audio_free_playlist();
   preview_audio_close_foreground();
   preview_audio_drop_session_timer();
   s_playlist_count = 0;
