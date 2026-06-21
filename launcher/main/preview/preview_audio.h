@@ -5,6 +5,7 @@
 
 extern const preview_app_t preview_audio_app;
 bool preview_audio_session_is_active(void);
+const char *preview_audio_session_current_path(void);
 bool preview_audio_restore_foreground(lv_obj_t *screen, lv_group_t *input_group);
 void preview_audio_stop_session(void);
 

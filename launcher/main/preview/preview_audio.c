@@ -426,7 +426,32 @@ static void preview_audio_apply_volume_delta(int delta) {
 static void preview_audio_apply_seek_delta(int delta_seconds) {
   if (delta_seconds == 0)
     return;
-  audio_seek_seconds(delta_seconds);
+
+  uint32_t pos_ms = audio_get_position_ms();
+  uint32_t dur_ms = audio_get_duration_ms();
+  int clamped_delta = delta_seconds;
+
+  if (delta_seconds > 0 && dur_ms > 0) {
+    if (pos_ms >= dur_ms)
+      return;
+    uint32_t remaining_ms = dur_ms - pos_ms;
+    int max_forward_sec = (int)((remaining_ms - 1) / 1000);
+    if (max_forward_sec <= 0)
+      return;
+    if (clamped_delta > max_forward_sec)
+      clamped_delta = max_forward_sec;
+  } else if (delta_seconds < 0) {
+    int max_backward_sec = (int)(pos_ms / 1000);
+    if (max_backward_sec <= 0)
+      return;
+    if (-clamped_delta > max_backward_sec)
+      clamped_delta = -max_backward_sec;
+  }
+
+  if (clamped_delta == 0)
+    return;
+
+  audio_seek_seconds(clamped_delta);
   preview_audio_update_ui(true);
 }
 
@@ -865,6 +890,10 @@ static const char *preview_audio_current_path(void) {
 }
 
 bool preview_audio_session_is_active(void) { return s_session_active; }
+
+const char *preview_audio_session_current_path(void) {
+  return s_session_active ? s_current_path : NULL;
+}
 
 bool preview_audio_restore_foreground(lv_obj_t *screen, lv_group_t *input_group) {
   (void)input_group;

@@ -870,6 +870,7 @@ static void fm_open_preview(const char *fullpath) {
   fm_remember_focus();
   const char *selected_name = fm_base_name(fullpath);
   bool is_audio = fm_is_playable_audio_filename(selected_name);
+  const char *playing_path = preview_audio_session_current_path();
   fm_preview_filter_fn filter = fm_preview_filter_for_name(selected_name);
   char *shared_names = NULL;
   int shared_count = 0;
@@ -882,6 +883,16 @@ static void fm_open_preview(const char *fullpath) {
   if (s_entries) {
     free(s_entries);
     s_entries = NULL;
+  }
+
+  if (is_audio && preview_audio_session_is_active() && playing_path &&
+      strcmp(playing_path, fullpath) == 0) {
+    platform_free(shared_names);
+    if (preview_audio_restore_foreground(g_ui.screen, g_ui.input_group))
+      g_ui.current_page = PAGE_FILES;
+    else
+      fm_create();
+    return;
   }
 
   preview_open_args_t args = {
