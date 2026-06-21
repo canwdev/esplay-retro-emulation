@@ -8,6 +8,7 @@
 #include "hal_audio.h"
 #include "hal_storage.h"
 #include "input_bridge.h"
+#include "preview_audio.h"
 #include "lcd.h"
 #include "lvgl.h"
 #include "nvs_flash.h"
@@ -118,10 +119,13 @@ static void init_lvgl_display(void) {
 
   ui_backlight_init();
   input_bridge_init();
-  ui_home_create();
 }
 
-static void init_ui(void) { hal_storage_mount(); }
+static void init_ui(void) {
+  hal_storage_mount();
+  preview_audio_restore_persisted_session();
+  ui_home_create();
+}
 
 static uint32_t main_loop_max_delay_ms(void) {
   return ui_backlight_is_on() ? MAIN_LOOP_MAX_DELAY_ACTIVE_MS

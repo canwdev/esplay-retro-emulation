@@ -2,6 +2,7 @@
 
 #include "audio.h"
 #include "file_manager.h"
+#include "hal_settings.h"
 #include "input_repeat.h"
 #include "platform_log.h"
 #include "platform_mem.h"
@@ -23,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 
 static const char *TAG = "preview_audio";
 
@@ -103,10 +105,19 @@ static input_repeat_state_t s_volume_repeat;
 static input_repeat_state_t s_seek_repeat;
 static const char *preview_audio_current_path(void);
 static void preview_audio_close_foreground(void);
+static void preview_audio_reset_session_state(void);
 static void preview_audio_stop_session_internal(void);
 static void preview_audio_session_tick(bool force_ui);
 static bool preview_audio_build_foreground(lv_obj_t *screen);
 static void preview_audio_session_timer_cb(lv_timer_t *timer);
+static bool preview_audio_prepare_session(const char *path, char *shared_names,
+                                          int shared_count, int shared_index,
+                                          int shared_name_stride,
+                                          const char *cwd_override);
+static void preview_audio_persist_state(bool armed);
+static bool preview_audio_path_exists(const char *path);
+static bool preview_audio_copy_dirname(const char *path, char *out,
+                                       size_t out_sz);
 
 static const input_repeat_config_t s_audio_adjust_repeat = {
     .initial_delay_ms = 400,
@@ -147,6 +158,42 @@ static void preview_audio_drop_session_timer(void) {
     return;
   lv_timer_delete(s_session_timer);
   s_session_timer = NULL;
+}
+
+static bool preview_audio_path_exists(const char *path) {
+  if (!path || path[0] == '\0')
+    return false;
+#ifdef TARGET_SIM
+  bool is_dir = false;
+  bool is_reg = false;
+  unsigned long size = 0;
+  unsigned long winerr = 0;
+  return sim_path_get_info_utf8(path, &is_dir, &is_reg, &size, &winerr) && is_reg;
+#else
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+#endif
+}
+
+static bool preview_audio_copy_dirname(const char *path, char *out,
+                                       size_t out_sz) {
+  if (!path || !out || out_sz == 0)
+    return false;
+  const char *slash = strrchr(path, '/');
+  if (!slash)
+    return false;
+  size_t len = (size_t)(slash - path);
+  if (len == 0 || len >= out_sz)
+    return false;
+  memcpy(out, path, len);
+  out[len] = '\0';
+  return true;
+}
+
+static void preview_audio_persist_state(bool armed) {
+  hal_settings_save(SettingMusicSessionArmed, armed ? 1 : 0);
+  if (s_current_path[0] != '\0')
+    hal_settings_save_str(SettingMusicSessionPath, s_current_path);
 }
 
 /* ------------------------------------------------------------------ can_open */
@@ -229,6 +276,8 @@ static void preview_audio_build_playlist(preview_open_args_t *args,
 
   if (args->cwd)
     strlcpy(s_playlist_cwd, args->cwd, sizeof(s_playlist_cwd));
+  else
+    preview_audio_copy_dirname(current, s_playlist_cwd, sizeof(s_playlist_cwd));
 
   if (args->shared_names && args->shared_count > 0 && args->shared_name_stride == FM_NAME_LEN) {
     s_playlist = (char (*)[FM_NAME_LEN])args->shared_names;
@@ -510,6 +559,8 @@ static void preview_audio_start_track(const char *path) {
                      path, was_playing);
   strlcpy(s_current_path, path, sizeof(s_current_path));
   s_track_confirmed_playing = false;
+  preview_audio_ensure_session_timer();
+  preview_audio_persist_state(true);
   audio_play_file_async(path);
   bool now_playing = audio_is_playing();
   if (s_filename_label && lv_obj_is_valid(s_filename_label))
@@ -544,6 +595,45 @@ static void preview_audio_play_index(int idx) {
   PREVIEW_AUDIO_LOGI("play_index idx=%d playlist=%s count=%d full=%s",
                      idx, s_playlist[idx], s_playlist_count, full);
   preview_audio_start_track(full);
+}
+
+static bool preview_audio_prepare_session(const char *path, char *shared_names,
+                                          int shared_count, int shared_index,
+                                          int shared_name_stride,
+                                          const char *cwd_override) {
+  if (!path || path[0] == '\0')
+    return false;
+
+  s_playlist = NULL;
+  s_playlist_count = 0;
+  s_current_index = 0;
+  s_shuffle_pos = 0;
+  s_playlist_cwd[0] = '\0';
+  s_playlist_from_shared = false;
+  s_close_to_background = false;
+  strlcpy(s_current_path, path, sizeof(s_current_path));
+
+  preview_open_args_t args = {
+      .cwd = cwd_override,
+      .shared_names = shared_names,
+      .shared_count = shared_count,
+      .shared_index = shared_index,
+      .shared_name_stride = shared_name_stride,
+  };
+
+  if (!args.shared_names) {
+    s_playlist = malloc(AUDIO_PLAYLIST_MAX * FM_NAME_LEN);
+    if (!s_playlist) {
+      PREVIEW_AUDIO_LOGE("Failed to allocate memory for s_playlist");
+      return false;
+    }
+  }
+
+  preview_audio_build_playlist(&args, path);
+  s_session_active = true;
+  s_track_confirmed_playing = false;
+  ui_chrome_set_music_active(true);
+  return true;
 }
 
 static bool preview_audio_build_foreground(lv_obj_t *screen) {
@@ -666,27 +756,11 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   if (s_session_active)
     preview_audio_stop_session_internal();
 
-  s_playlist = NULL;
-  s_playlist_count = 0;
-  s_current_index = 0;
-  s_shuffle_pos = 0;
-  s_playlist_cwd[0] = '\0';
-  s_playlist_from_shared = false;
-  s_close_to_background = false;
-
-  if (!args->shared_names) {
-    s_playlist = malloc(AUDIO_PLAYLIST_MAX * FM_NAME_LEN);
-    if (!s_playlist) {
-      PREVIEW_AUDIO_LOGE("Failed to allocate memory for s_playlist");
-      return false;
-    }
-  }
-
-  preview_audio_build_playlist(args, path);
-  s_session_active = true;
-  s_track_confirmed_playing = false;
-  ui_chrome_set_music_active(true);
-  preview_audio_ensure_session_timer();
+  if (!preview_audio_prepare_session(path, (char *)args->shared_names,
+                                     args->shared_count, args->shared_index,
+                                     args->shared_name_stride, args->cwd))
+    return false;
+  args->shared_names = NULL;
   if (!preview_audio_build_foreground(args->screen)) {
     preview_audio_stop_session_internal();
     return false;
@@ -713,12 +787,7 @@ static void preview_audio_close_foreground(void) {
   s_mode_label = NULL;
 }
 
-static void preview_audio_stop_session_internal(void) {
-  audio_stop_playback();
-  uint32_t start = platform_millis();
-  while (audio_is_playing() && (platform_millis() - start) < 500)
-    preview_audio_wait_ms(10);
-
+static void preview_audio_reset_session_state(void) {
   if (s_playlist) {
     if (s_playlist_from_shared)
       platform_free(s_playlist);
@@ -738,6 +807,15 @@ static void preview_audio_stop_session_internal(void) {
   s_close_to_background = false;
   s_track_confirmed_playing = false;
   ui_chrome_set_music_active(false);
+}
+
+static void preview_audio_stop_session_internal(void) {
+  audio_stop_playback();
+  uint32_t start = platform_millis();
+  while (audio_is_playing() && (platform_millis() - start) < 500)
+    preview_audio_wait_ms(10);
+  preview_audio_persist_state(false);
+  preview_audio_reset_session_state();
 }
 
 static void preview_audio_close(void) {
@@ -809,7 +887,10 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
   if (edge[GAMEPAD_INPUT_START] || edge[GAMEPAD_INPUT_A]) {
     bool p = audio_is_paused(), pl = audio_is_playing();
     PREVIEW_AUDIO_LOGI("key: START/A toggle pause p=%d playing=%d", p, pl);
-    audio_toggle_pause();
+    if (!pl && !p)
+      preview_audio_play_index(s_current_index);
+    else
+      audio_toggle_pause();
     preview_audio_update_ui(true);
     return true;
   }
@@ -891,8 +972,43 @@ static const char *preview_audio_current_path(void) {
 
 bool preview_audio_session_is_active(void) { return s_session_active; }
 
+bool preview_audio_session_is_playback_live(void) {
+  return s_session_active && !s_active && (audio_is_playing() || audio_is_paused());
+}
+
 const char *preview_audio_session_current_path(void) {
   return s_session_active ? s_current_path : NULL;
+}
+
+bool preview_audio_session_switch_track(int delta) {
+  if (!preview_audio_session_is_playback_live() || delta == 0)
+    return false;
+  if (s_play_mode == PLAY_MODE_SHUFFLE)
+    preview_audio_play_index(preview_audio_shuffle_step((delta > 0) ? 1 : -1, false));
+  else
+    preview_audio_play_index(s_current_index + ((delta > 0) ? 1 : -1));
+  return true;
+}
+
+void preview_audio_restore_persisted_session(void) {
+  int32_t armed = 0;
+  if (s_session_active || hal_settings_load(SettingMusicSessionArmed, &armed) != 0 ||
+      armed == 0)
+    return;
+
+  char *saved_path = hal_settings_load_str(SettingMusicSessionPath);
+  if (!saved_path || saved_path[0] == '\0') {
+    free(saved_path);
+    return;
+  }
+  if (!preview_audio_path_exists(saved_path)) {
+    free(saved_path);
+    return;
+  }
+
+  if (!preview_audio_prepare_session(saved_path, NULL, 0, 0, FM_NAME_LEN, NULL))
+    preview_audio_reset_session_state();
+  free(saved_path);
 }
 
 bool preview_audio_restore_foreground(lv_obj_t *screen, lv_group_t *input_group) {

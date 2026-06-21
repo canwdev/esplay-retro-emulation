@@ -39,6 +39,8 @@ typedef enum Setting {
   SettingAlg,
   SettingUiTheme,
   SettingBacklightTimeout,
+  SettingMusicSessionArmed,
+  SettingMusicSessionPath,
   SettingMax,
 } Setting;
 

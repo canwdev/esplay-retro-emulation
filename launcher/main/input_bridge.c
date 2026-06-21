@@ -2,6 +2,7 @@
 #include "file_manager.h"
 #include "hal_input.h"
 #include "preview.h"
+#include "preview_audio.h"
 #include "ui_app.h"
 #include "ui_home.h"
 #include "ui_screen_test.h"
@@ -89,6 +90,19 @@ static void input_poll_timer_cb(lv_timer_t *t) {
     s_last = gp;
     s_last_valid = true;
     return;
+  }
+
+  if (g_ui.current_page == PAGE_HOME) {
+    bool handled = false;
+    if (edge[GAMEPAD_INPUT_L])
+      handled = preview_audio_session_switch_track(-1);
+    else if (edge[GAMEPAD_INPUT_R])
+      handled = preview_audio_session_switch_track(1);
+    if (handled) {
+      s_last = gp;
+      s_last_valid = true;
+      return;
+    }
   }
 
   if (edge[GAMEPAD_INPUT_B]) {

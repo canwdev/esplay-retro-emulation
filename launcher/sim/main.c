@@ -3,6 +3,7 @@
 #include "hal_input.h"
 #include "hal_storage.h"
 #include "input_bridge.h"
+#include "preview_audio.h"
 #include "platform_log.h"
 #include "platform_time.h"
 #include "ui_app.h"
@@ -115,6 +116,7 @@ int main(int argc, char **argv) {
 
   ui_backlight_init();
   input_bridge_init();
+  preview_audio_restore_persisted_session();
   ui_home_create();
 
   uint32_t last_ms = platform_millis();
