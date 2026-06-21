@@ -273,6 +273,17 @@ void fm_reset_cwd(void) {
   fm_restore_focus = false;
 }
 
+void fm_set_cwd(const char *path) {
+  if (!path || path[0] == '\0') {
+    fm_reset_cwd();
+    return;
+  }
+  strlcpy(fm_cwd, path, sizeof(fm_cwd));
+  fm_normalize_cwd();
+  if (!fm_has_root_prefix(fm_cwd))
+    strlcpy(fm_cwd, fm_root(), sizeof(fm_cwd));
+}
+
 const char *fm_get_cwd(void) { return fm_cwd; }
 
 const char *fm_base_name(const char *path) {

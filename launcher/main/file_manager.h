@@ -15,6 +15,7 @@ typedef struct {
 } fm_entry_t;
 
 void fm_reset_cwd(void);
+void fm_set_cwd(const char *path);
 const char *fm_get_cwd(void);
 const char *fm_base_name(const char *path);
 bool fm_is_wav_filename(const char *name);

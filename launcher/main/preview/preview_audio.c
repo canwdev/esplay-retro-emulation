@@ -196,6 +196,11 @@ static void preview_audio_persist_state(bool armed) {
     hal_settings_save_str(SettingMusicSessionPath, s_current_path);
 }
 
+static void preview_audio_sync_file_manager_cwd(void) {
+  if (s_playlist_cwd[0] != '\0')
+    fm_set_cwd(s_playlist_cwd);
+}
+
 /* ------------------------------------------------------------------ can_open */
 
 static bool preview_audio_can_open(const char *path) {
@@ -837,11 +842,13 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
   if ((edge[GAMEPAD_INPUT_A] && gp->values[GAMEPAD_INPUT_B] == 1) ||
       (edge[GAMEPAD_INPUT_B] && gp->values[GAMEPAD_INPUT_A] == 1)) {
     s_close_to_background = false;
+    preview_audio_sync_file_manager_cwd();
     fm_handle_back();
     return true;
   }
   if (edge[GAMEPAD_INPUT_B]) {
     s_close_to_background = true;
+    preview_audio_sync_file_manager_cwd();
     fm_handle_back();
     return true;
   }
