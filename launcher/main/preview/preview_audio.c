@@ -728,12 +728,13 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_obj_t *card = lv_obj_create(screen);
   lv_obj_remove_style_all(card);
   ui_theme_style_panel(card);
-  lv_obj_set_size(card, LV_PCT(90), 144);
-  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 2);
+  lv_obj_set_size(card, LV_PCT(98), 144);
+  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top());
   lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
                         LV_FLEX_ALIGN_START);
-  lv_obj_set_style_pad_all(card, 6, 0);
+  lv_obj_set_style_pad_hor(card, 6, 0);
+  lv_obj_set_style_pad_ver(card, 4, 0);
   lv_obj_set_style_pad_row(card, 2, 0);
 
   s_tag_title_label = lv_label_create(card);
@@ -768,11 +769,11 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_obj_t *time_row = lv_obj_create(screen);
   lv_obj_remove_style_all(time_row);
   lv_obj_set_size(time_row, LV_PCT(100), 22);
-  lv_obj_align(time_row, LV_ALIGN_BOTTOM_MID, 0, -50);
+  lv_obj_align(time_row, LV_ALIGN_BOTTOM_MID, 0, -30);
   lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_hor(time_row, 8, 0);
+  lv_obj_set_style_pad_hor(time_row, 6, 0);
 
   s_time_pos_label = lv_label_create(time_row);
   lv_label_set_text(s_time_pos_label, "0:00");
@@ -788,21 +789,21 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
 
   /* ---- progress bar (full width) ---- */
   s_progress_bar = lv_bar_create(screen);
-  lv_obj_set_size(s_progress_bar, LV_PCT(94), 10);
+  lv_obj_set_size(s_progress_bar, LV_PCT(96), 10);
   lv_bar_set_range(s_progress_bar, 0, 100);
   ui_theme_style_bar(s_progress_bar);
-  lv_obj_align(s_progress_bar, LV_ALIGN_BOTTOM_MID, 0, -32);
+  lv_obj_align(s_progress_bar, LV_ALIGN_BOTTOM_MID, 0, -22);
 
   /* ---- info row (start-aligned, spacer pushes vol right) ---- */
   lv_obj_t *info_row = lv_obj_create(screen);
   lv_obj_remove_style_all(info_row);
   lv_obj_set_size(info_row, LV_PCT(100), 22);
-  lv_obj_align(info_row, LV_ALIGN_BOTTOM_MID, 0, -6);
+  lv_obj_align(info_row, LV_ALIGN_BOTTOM_MID, 0, -0);
   lv_obj_set_flex_flow(info_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(info_row, LV_FLEX_ALIGN_START,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_hor(info_row, 8, 0);
-  lv_obj_set_style_pad_column(info_row, 3, 0);
+  lv_obj_set_style_pad_hor(info_row, 6, 0);
+  lv_obj_set_style_pad_column(info_row, 4, 0);
 
   s_track_label = lv_label_create(info_row);
   lv_label_set_text(s_track_label, "1 / 1");
