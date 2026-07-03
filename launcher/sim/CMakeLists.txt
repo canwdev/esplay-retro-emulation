@@ -58,11 +58,11 @@ add_executable(launcher_sim
   ../main/file_manager.c
   ../main/preview/preview_registry.c
   ../main/preview/preview_text.c
-  ../main/preview/preview_audio.c
-  ../main/preview/preview_audio_lrc.c
-  ../main/preview/preview_audio_playlist.c
-  ../main/preview/preview_audio_tags.c
-  ../main/preview/preview_audio_ui.c
+  ../main/preview/preview_audio/preview_audio.c
+  ../main/preview/preview_audio/preview_audio_lrc.c
+  ../main/preview/preview_audio/preview_audio_playlist.c
+  ../main/preview/preview_audio/preview_audio_tags.c
+  ../main/preview/preview_audio/preview_audio_ui.c
   ../main/preview/preview_bmp.c
 )
 
@@ -70,6 +70,7 @@ target_compile_definitions(launcher_sim PRIVATE TARGET_SIM)
 target_include_directories(launcher_sim PRIVATE
   ../main
   ../main/preview
+  ../main/preview/preview_audio
   ../hal
   ../port/sim
   ../../esplay-sdk/hal-drivers

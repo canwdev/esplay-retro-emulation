@@ -4,7 +4,6 @@
 #include "sim_compat.h"
 #endif
 
-#include "platform_log.h"
 #include "ui_backlight.h"
 #include "ui_chrome.h"
 #include "ui_font.h"
@@ -13,8 +12,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
-static const char *TAG = "audio_ui";
 
 /* ---- helpers ---- */
 
