@@ -8,6 +8,14 @@
 #define AUDIO_PLAYLIST_MAX 512
 #define AUDIO_PATH_MAX     256
 
+typedef enum {
+  PLAY_MODE_LIST_LOOP = 0, /* wrap around at end of list  (default) */
+  PLAY_MODE_SHUFFLE,       /* Fisher-Yates shuffled cycle, no repeat per round */
+  PLAY_MODE_SINGLE_LOOP,   /* replay the same track forever          */
+  PLAY_MODE_LIST_PLAY,     /* play to last track then stop           */
+  PLAY_MODE_COUNT,
+} play_mode_t;
+
 typedef struct {
   char **items;
   int    count;

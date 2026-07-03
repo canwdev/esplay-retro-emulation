@@ -1,6 +1,8 @@
 #include "preview_audio.h"
 #include "preview_audio_lrc.h"
 #include "preview_audio_playlist.h"
+#include "preview_audio_tags.h"
+#include "preview_audio_ui.h"
 
 #include "audio.h"
 #include "eq.h"
@@ -11,12 +13,8 @@
 #include "input_repeat.h"
 #include "platform_log.h"
 #include "platform_time.h"
-#include "ui_backlight.h"
-#include "ui_chrome.h"
-#include "ui_font.h"
 #include "ui_home.h"
 #include "ui_settings.h"
-#include "ui_theme.h"
 
 #ifdef TARGET_SIM
 #include "sim_compat.h"
@@ -39,70 +37,30 @@ static const char *TAG = "preview_audio";
 static void preview_audio_wait_ms(uint32_t ms) {
   platform_sleep_ms(ms);
 }
+
 #define AUDIO_SEEK_STEP_SECONDS   5
 #define AUDIO_ADJUST_ACCEL_EVERY  4
 #define AUDIO_ADJUST_MAX_SCALE    4
 
-typedef enum {
-  PLAY_MODE_LIST_LOOP = 0, /* wrap around at end of list  (default) */
-  PLAY_MODE_SHUFFLE,       /* Fisher-Yates shuffled cycle, no repeat per round */
-  PLAY_MODE_SINGLE_LOOP,   /* replay the same track forever          */
-  PLAY_MODE_LIST_PLAY,     /* play to last track then stop           */
-  PLAY_MODE_COUNT,
-} play_mode_t;
-
-static audio_playlist_t s_pl;
-static char s_current_path[AUDIO_PATH_MAX];
-static bool s_active;
-static bool s_session_active;
-static bool s_close_to_background;
+static audio_playlist_t   s_pl;
+static audio_ui_t         s_ui;
+static audio_tag_cache_t  s_tag_cache;
+static char    s_current_path[AUDIO_PATH_MAX];
+static bool    s_active;
+static bool    s_session_active;
+static bool    s_close_to_background;
 static lv_timer_t *s_session_timer;
-
-static ui_chrome_t s_chrome;
-static lv_obj_t *s_tag_title_label;
-static lv_obj_t *s_tag_artist_label;
-static lv_obj_t *s_tech_label;
-static lv_obj_t *s_track_label;
-static lv_obj_t *s_time_pos_label;
-static lv_obj_t *s_time_dur_label;
-static lv_obj_t *s_status_label;
-static lv_obj_t *s_progress_bar;
-static lv_obj_t *s_vol_pct_label;
-static lv_obj_t *s_eq_label;
-static lv_obj_t *s_mode_label;
-static uint32_t  s_last_ui_ms;
-static uint8_t   s_last_vol;
-static int       s_last_progress;
-static uint32_t  s_last_pos_sec;
-static uint32_t  s_last_dur_sec;
-static bool      s_last_paused;
-static bool      s_last_playing;
-static int       s_last_track_index;
-static int       s_last_track_count;
-static audio_track_type_t s_last_track_type;
-static uint32_t  s_last_sample_rate_hz;
-static uint16_t  s_last_channels;
-static uint16_t  s_last_bits_per_sample;
-static uint16_t  s_last_bitrate_kbps;
-static bool      s_last_is_float;
-static bool      s_last_mp3_vbr;
 static play_mode_t s_play_mode;
 /* Set true once the current track is confirmed playing; cleared on track end
  * or when a new track is started, to gate auto-advance triggering. */
 static bool s_track_confirmed_playing;
 static input_repeat_state_t s_volume_repeat;
 static input_repeat_state_t s_seek_repeat;
-/* cached ID3 tags so restore-foreground can repopulate labels */
-static char s_cached_title[128];
-static char s_cached_artist[260];  /* 128+3+128+1 for "Artist - Album" */
-static bool s_has_cached_tags;
-static lv_obj_t *s_lyric_label;
+
 static const char *preview_audio_current_path(void);
-static void preview_audio_close_foreground(void);
 static void preview_audio_reset_session_state(void);
 static void preview_audio_stop_session_internal(void);
 static void preview_audio_session_tick(bool force_ui);
-static bool preview_audio_build_foreground(lv_obj_t *screen);
 static void preview_audio_session_timer_cb(lv_timer_t *timer);
 static bool preview_audio_prepare_session(const char *path, char *shared_names,
                                           int shared_count, int shared_index,
@@ -110,6 +68,7 @@ static bool preview_audio_prepare_session(const char *path, char *shared_names,
                                           const char *cwd_override);
 static void preview_audio_persist_state(bool armed);
 static bool preview_audio_path_exists(const char *path);
+static void preview_audio_update_ui(bool force);
 
 static const input_repeat_config_t s_audio_adjust_repeat = {
     .initial_delay_ms = 400,
@@ -119,22 +78,6 @@ static const input_repeat_config_t s_audio_adjust_repeat = {
 };
 
 /* ------------------------------------------------------------------ helpers */
-
-static const char *play_mode_text(play_mode_t m) {
-  switch (m) {
-    case PLAY_MODE_LIST_LOOP:   return LV_SYMBOL_LOOP " All Loop";
-    case PLAY_MODE_SHUFFLE:     return LV_SYMBOL_SHUFFLE " Random";
-    case PLAY_MODE_SINGLE_LOOP: return LV_SYMBOL_LOOP " x1 Loop";
-    case PLAY_MODE_LIST_PLAY:   return LV_SYMBOL_NEXT " Sequential";
-    default: return "";
-  }
-}
-
-static void update_mode_label(void) {
-  if (!s_mode_label || !lv_obj_is_valid(s_mode_label))
-    return;
-  lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
-}
 
 static void preview_audio_ensure_session_timer(void) {
   if (s_session_timer)
@@ -184,171 +127,42 @@ static bool preview_audio_can_open(const char *path) {
   return fm_is_playable_audio_filename(fm_base_name(path));
 }
 
-/* ------------------------------------------------------------------ UI update */
+/* ------------------------------------------------------------------ UI update (glue: collects state → ui module) */
 
 static void preview_audio_update_ui(bool force) {
   if (!s_active)
     return;
-  /* No point updating widgets the user cannot see. */
-  if (!ui_backlight_is_on())
-    return;
-  if (!s_progress_bar || !s_time_pos_label || !s_status_label)
-    return;
-  if (!lv_obj_is_valid(s_progress_bar) ||
-      !lv_obj_is_valid(s_time_pos_label) || !lv_obj_is_valid(s_status_label))
-    return;
-  if (!force) {
-    uint32_t now = lv_tick_get();
-    if ((now - s_last_ui_ms) < 250)
-      return;
-    s_last_ui_ms = now;
-  } else {
-    s_last_ui_ms = lv_tick_get();
-  }
 
   uint32_t pos = audio_get_position_ms();
   uint32_t dur = audio_get_duration_ms();
   if (dur == 0)
     dur = 1;
-
   int progress = (int32_t)(pos * 100 / dur);
-  if (force || progress != s_last_progress) {
-    lv_bar_set_value(s_progress_bar, progress, LV_ANIM_OFF);
-    s_last_progress = progress;
+
+  char tech_buf[128] = "";
+  audio_track_info_t ti;
+  if (audio_get_track_info(&ti)) {
+    audio_tag_format_tech(tech_buf, sizeof(tech_buf), &ti,
+                           preview_audio_lrc_has_data());
   }
 
-  uint8_t vol         = audio_get_volume();
-  bool    vol_changed = force || vol != s_last_vol;
-  if (vol_changed) {
-    s_last_vol = vol;
-    if (s_vol_pct_label && lv_obj_is_valid(s_vol_pct_label))
-      lv_label_set_text_fmt(s_vol_pct_label, "%u%%", vol);
-  }
+  audio_ui_snap_t snap = {
+    .progress    = progress,
+    .volume      = audio_get_volume(),
+    .pos_sec     = pos / 1000,
+    .dur_sec     = dur / 1000,
+    .paused      = audio_is_paused(),
+    .playing     = audio_is_playing(),
+    .track_index = s_pl.current_index,
+    .track_count = s_pl.count,
+    .tech_text   = tech_buf,
+    .lrc_text    = preview_audio_lrc_get_text(pos, force),
+  };
 
-  uint32_t pos_sec = pos / 1000;
-  uint32_t dur_sec = dur / 1000;
-  if (force || pos_sec != s_last_pos_sec) {
-    if (s_time_pos_label && lv_obj_is_valid(s_time_pos_label))
-      lv_label_set_text_fmt(s_time_pos_label, "%lu:%02lu",
-                            (unsigned long)(pos_sec / 60),
-                            (unsigned long)(pos_sec % 60));
-    s_last_pos_sec = pos_sec;
-  }
-  if (force || dur_sec != s_last_dur_sec) {
-    if (s_time_dur_label && lv_obj_is_valid(s_time_dur_label))
-      lv_label_set_text_fmt(s_time_dur_label, "%lu:%02lu",
-                            (unsigned long)(dur_sec / 60),
-                            (unsigned long)(dur_sec % 60));
-    s_last_dur_sec = dur_sec;
-  }
-
-  if (s_track_label && lv_obj_is_valid(s_track_label) && s_pl.count > 0)
-    if (force || s_last_track_index != s_pl.current_index ||
-        s_last_track_count != s_pl.count) {
-      lv_label_set_text_fmt(s_track_label, "%d/%d", s_pl.current_index + 1,
-                            s_pl.count);
-      s_last_track_index = s_pl.current_index;
-      s_last_track_count = s_pl.count;
-    }
-
-  bool paused  = audio_is_paused();
-  bool playing = audio_is_playing();
-  if (force || paused != s_last_paused || playing != s_last_playing) {
-    if (paused)
-      lv_label_set_text(s_status_label, LV_SYMBOL_PAUSE " Paused");
-    else if (playing)
-      lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
-    else {
-      lv_label_set_text(s_status_label, LV_SYMBOL_STOP " Stopped");
-      PREVIEW_AUDIO_LOGW("update_ui: trans to STOP! prev_paused=%d prev_playing=%d",
-                         s_last_paused, s_last_playing);
-    }
-    s_last_paused  = paused;
-    s_last_playing = playing;
-  }
-
-  if (s_tech_label && lv_obj_is_valid(s_tech_label)) {
-    audio_track_info_t ti;
-    if (audio_get_track_info(&ti)) {
-      bool changed = force || ti.type != s_last_track_type ||
-                     ti.sample_rate_hz != s_last_sample_rate_hz ||
-                     ti.channels != s_last_channels ||
-                     ti.bits_per_sample != s_last_bits_per_sample ||
-                     ti.bitrate_kbps != s_last_bitrate_kbps ||
-                     ti.is_float != s_last_is_float ||
-                     ti.mp3_vbr != s_last_mp3_vbr;
-      if (changed) {
-        if (ti.sample_rate_hz > 0) {
-          uint32_t sr10  = ti.sample_rate_hz / 100;
-          uint32_t sr_i  = sr10 / 10;
-          uint32_t sr_f  = sr10 % 10;
-          if (ti.type == AUDIO_TRACK_TYPE_MP3) {
-            if (ti.bitrate_kbps > 0 && ti.mp3_vbr)
-              lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %ukbps VBR %uch",
-                                    (unsigned long)sr_i, (unsigned long)sr_f,
-                                    (unsigned)ti.bitrate_kbps,
-                                    (unsigned)ti.channels);
-            else if (ti.bitrate_kbps > 0)
-              lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %ukbps %uch",
-                                    (unsigned long)sr_i, (unsigned long)sr_f,
-                                    (unsigned)ti.bitrate_kbps,
-                                    (unsigned)ti.channels);
-            else
-              lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %uch",
-                                    (unsigned long)sr_i, (unsigned long)sr_f,
-                                    (unsigned)ti.channels);
-          } else if (ti.type == AUDIO_TRACK_TYPE_WAV) {
-            if (ti.is_float && ti.bits_per_sample > 0)
-              lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz F%u %uch",
-                                    (unsigned long)sr_i, (unsigned long)sr_f,
-                                    (unsigned)ti.bits_per_sample,
-                                    (unsigned)ti.channels);
-            else if (ti.bits_per_sample > 0)
-              lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz %ub %uch",
-                                    (unsigned long)sr_i, (unsigned long)sr_f,
-                                    (unsigned)ti.bits_per_sample,
-                                    (unsigned)ti.channels);
-            else
-              lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz %uch",
-                                    (unsigned long)sr_i, (unsigned long)sr_f,
-                                    (unsigned)ti.channels);
-          } else {
-            lv_label_set_text(s_tech_label, "N/A");
-          }
-        } else {
-          /* track info not yet available (stopped / not playing) */
-          lv_label_set_text(s_tech_label, "Track info not yet available (stopped / not playing)");
-        }
-
-        s_last_track_type      = ti.type;
-        s_last_sample_rate_hz  = ti.sample_rate_hz;
-        s_last_channels        = ti.channels;
-        s_last_bits_per_sample = ti.bits_per_sample;
-        s_last_bitrate_kbps    = ti.bitrate_kbps;
-        s_last_is_float        = ti.is_float;
-        s_last_mp3_vbr         = ti.mp3_vbr;
-      }
-      /* Append " LRC" marker when embedded / unsynced lyrics are present */
-      if (changed && preview_audio_lrc_has_data() &&
-          s_tech_label && lv_obj_is_valid(s_tech_label)) {
-        const char *cur = lv_label_get_text(s_tech_label);
-        if (cur && cur[0] && !strstr(cur, "LRC")) {
-          char buf[128];
-          snprintf(buf, sizeof(buf), "%s LRC", cur);
-          lv_label_set_text(s_tech_label, buf);
-        }
-      }
-    }
-  }
-
-  /* ---- lyric line ---- */
-  if (s_lyric_label && lv_obj_is_valid(s_lyric_label)) {
-    const char *lrc_text =
-        preview_audio_lrc_get_text(audio_get_position_ms(), force);
-    if (lrc_text)
-      lv_label_set_text(s_lyric_label, lrc_text);
-  }
+  audio_ui_update(&s_ui, force, &snap);
 }
+
+/* ------------------------------------------------------------------ volume / seek */
 
 static void preview_audio_apply_volume_delta(int delta) {
   if (delta == 0)
@@ -464,46 +278,20 @@ static void preview_audio_start_track(const char *path) {
   preview_audio_persist_state(true);
   audio_play_file_async(path);
 
-  ui_chrome_set_title(&s_chrome, bn);
+  audio_ui_set_title(&s_ui, bn);
 
-  if (s_tag_title_label && lv_obj_is_valid(s_tag_title_label))
-    lv_label_set_text(s_tag_title_label,
-                      has_tags && tags.title[0] ? tags.title : bn);
-  if (s_tag_artist_label && lv_obj_is_valid(s_tag_artist_label)) {
-    if (has_tags && (tags.artist[0] || tags.album[0])) {
-      if (tags.artist[0] && tags.album[0])
-        lv_label_set_text_fmt(s_tag_artist_label, "%s - %s",
-                              tags.artist, tags.album);
-      else if (tags.artist[0])
-        lv_label_set_text(s_tag_artist_label, tags.artist);
-      else
-        lv_label_set_text(s_tag_artist_label, tags.album);
-    } else {
-      lv_label_set_text(s_tag_artist_label, "");
-    }
-  }
+  /* cache ID3 tags so restore-foreground can repopulate labels */
+  audio_tag_cache_from_id3(&s_tag_cache, bn, has_tags ? &tags : NULL);
 
-  /* cache ID3 tags so restore-foreground can repopulate */
-  if (has_tags && tags.title[0]) {
-    strlcpy(s_cached_title, tags.title, sizeof(s_cached_title));
-  } else {
-    strlcpy(s_cached_title, bn, sizeof(s_cached_title));
-  }
-  s_cached_artist[0] = '\0';
-  if (has_tags) {
-    if (tags.artist[0] && tags.album[0])
-      snprintf(s_cached_artist, sizeof(s_cached_artist), "%s - %s",
-               tags.artist, tags.album);
-    else if (tags.artist[0])
-      strlcpy(s_cached_artist, tags.artist, sizeof(s_cached_artist));
-    else if (tags.album[0])
-      strlcpy(s_cached_artist, tags.album, sizeof(s_cached_artist));
-  }
-  s_has_cached_tags = true;
+  /* update card labels from tag cache */
+  if (s_ui.tag_title_label && lv_obj_is_valid(s_ui.tag_title_label))
+    lv_label_set_text(s_ui.tag_title_label, s_tag_cache.title);
+  if (s_ui.tag_artist_label && lv_obj_is_valid(s_ui.tag_artist_label))
+    lv_label_set_text(s_ui.tag_artist_label, s_tag_cache.artist);
 
   /* parse built-in LRC lyrics */
-  if (s_lyric_label && lv_obj_is_valid(s_lyric_label))
-    lv_label_set_text(s_lyric_label, "");
+  if (s_ui.lyric_label && lv_obj_is_valid(s_ui.lyric_label))
+    lv_label_set_text(s_ui.lyric_label, "");
   preview_audio_lrc_parse(has_tags && tags.lyrics[0] ? tags.lyrics : NULL);
 
   bool now_playing = audio_is_playing();
@@ -530,6 +318,8 @@ static void preview_audio_play_index(int idx) {
   preview_audio_start_track(full);
 }
 
+/* ------------------------------------------------------------------ session lifecycle */
+
 static bool preview_audio_prepare_session(const char *path, char *shared_names,
                                           int shared_count, int shared_index,
                                           int shared_name_stride,
@@ -552,180 +342,6 @@ static bool preview_audio_prepare_session(const char *path, char *shared_names,
   return true;
 }
 
-static bool preview_audio_build_foreground(lv_obj_t *screen) {
-  if (!screen)
-    return false;
-
-  ui_chrome_detach(&s_chrome);
-  lv_obj_clean(screen);
-  ui_theme_apply_screen(screen);
-
-  s_chrome = ui_chrome_create(screen, "Music Player");
-
-  lv_obj_t *card = lv_obj_create(screen);
-  lv_obj_remove_style_all(card);
-  ui_theme_style_panel(card);
-  lv_obj_set_size(card, LV_PCT(98), 160);
-  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top());
-  lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                        LV_FLEX_ALIGN_START);
-  lv_obj_set_style_pad_hor(card, 6, 0);
-  lv_obj_set_style_pad_ver(card, 4, 0);
-  lv_obj_set_style_pad_row(card, 2, 0);
-
-  s_tag_title_label = lv_label_create(card);
-  lv_obj_set_width(s_tag_title_label, LV_PCT(100));
-  lv_label_set_long_mode(s_tag_title_label, LV_LABEL_LONG_MODE_DOTS);
-  lv_label_set_text(s_tag_title_label,
-                    s_has_cached_tags ? s_cached_title
-                                      : fm_base_name(s_current_path));
-  ui_theme_style_label_primary(s_tag_title_label);
-
-  s_tag_artist_label = lv_label_create(card);
-  lv_obj_set_width(s_tag_artist_label, LV_PCT(100));
-  lv_label_set_long_mode(s_tag_artist_label,  LV_LABEL_LONG_MODE_DOTS);
-  lv_label_set_text(s_tag_artist_label,
-                    s_has_cached_tags ? s_cached_artist : "");
-  ui_theme_style_label_secondary(s_tag_artist_label);
-
-  /* spacer between artist and tech info */
-  lv_obj_t *card_gap = lv_obj_create(card);
-  lv_obj_remove_style_all(card_gap);
-  lv_obj_set_height(card_gap, 6);
-
-  s_tech_label = lv_label_create(card);
-  lv_obj_set_width(s_tech_label, LV_PCT(100));
-  lv_label_set_long_mode(s_tech_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-  lv_label_set_text(s_tech_label, "");
-  ui_theme_style_label_secondary(s_tech_label);
-
-  /* lyric line (auto-wrap, hidden when empty) */
-  s_lyric_label = lv_label_create(card);
-  lv_obj_set_width(s_lyric_label, LV_PCT(100));
-  lv_label_set_long_mode(s_lyric_label, LV_LABEL_LONG_MODE_WRAP);
-  lv_label_set_text(s_lyric_label, "");
-  ui_theme_style_label_accent(s_lyric_label);
-
-  /* filler stretches card to fill remaining space (flex:1) */
-  lv_obj_t *card_fill = lv_obj_create(card);
-  lv_obj_remove_style_all(card_fill);
-  lv_obj_set_flex_grow(card_fill, 1);
-
-  /* ---- time row: pos / status / dur (space-between) ---- */
-  lv_obj_t *time_row = lv_obj_create(screen);
-  lv_obj_remove_style_all(time_row);
-  lv_obj_set_size(time_row, LV_PCT(100), 22);
-  lv_obj_align(time_row, LV_ALIGN_BOTTOM_MID, 0, -34);
-  lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_hor(time_row, 6, 0);
-
-  s_time_pos_label = lv_label_create(time_row);
-  lv_label_set_text(s_time_pos_label, "0:00");
-  ui_theme_style_label_secondary(s_time_pos_label);
-
-  s_status_label = lv_label_create(time_row);
-  lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
-  ui_theme_style_label_primary(s_status_label);
-
-  s_time_dur_label = lv_label_create(time_row);
-  lv_label_set_text(s_time_dur_label, "0:00");
-  ui_theme_style_label_secondary(s_time_dur_label);
-
-  /* ---- progress bar (full width) ---- */
-  s_progress_bar = lv_bar_create(screen);
-  lv_obj_set_size(s_progress_bar, LV_PCT(96), 10);
-  lv_bar_set_range(s_progress_bar, 0, 100);
-  ui_theme_style_bar(s_progress_bar);
-  lv_obj_align(s_progress_bar, LV_ALIGN_BOTTOM_MID, 0, -22);
-
-  /* ---- info row (justify-between via spacers, vol icon+% grouped) ---- */
-  lv_obj_t *info_row = lv_obj_create(screen);
-  lv_obj_remove_style_all(info_row);
-  lv_obj_set_size(info_row, LV_PCT(100), 22);
-  lv_obj_align(info_row, LV_ALIGN_BOTTOM_MID, 0, -0);
-  lv_obj_set_flex_flow(info_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(info_row, LV_FLEX_ALIGN_START,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_hor(info_row, 6, 0);
-  lv_obj_set_style_pad_column(info_row, 4, 0);
-
-  s_track_label = lv_label_create(info_row);
-  lv_label_set_text(s_track_label, "1/1");
-  ui_theme_style_label_secondary(s_track_label);
-
-  /* spacer between track and mode */
-  lv_obj_t *sp0 = lv_obj_create(info_row);
-  lv_obj_remove_style_all(sp0);
-  lv_obj_set_flex_grow(sp0, 1);
-  lv_obj_set_height(sp0, 1);
-
-  s_mode_label = lv_label_create(info_row);
-  lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
-  ui_theme_style_label_secondary(s_mode_label);
-
-  /* spacer between mode and eq */
-  lv_obj_t *sp1 = lv_obj_create(info_row);
-  lv_obj_remove_style_all(sp1);
-  lv_obj_set_flex_grow(sp1, 1);
-  lv_obj_set_height(sp1, 1);
-
-  s_eq_label = lv_label_create(info_row);
-  lv_label_set_text(s_eq_label, eq_preset_name(eq_get_preset()));
-  ui_theme_style_label_accent(s_eq_label);
-
-  /* spacer between eq and volume group */
-  lv_obj_t *sp2 = lv_obj_create(info_row);
-  lv_obj_remove_style_all(sp2);
-  lv_obj_set_flex_grow(sp2, 1);
-  lv_obj_set_height(sp2, 1);
-
-  /* volume group: icon + % together */
-  lv_obj_t *vol_group = lv_obj_create(info_row);
-  lv_obj_set_size(vol_group, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(vol_group, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(vol_group, LV_FLEX_ALIGN_START,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_all(vol_group, 0, 0);
-  lv_obj_set_style_pad_column(vol_group, 2, 0);
-  lv_obj_set_style_border_width(vol_group, 0, 0);
-  lv_obj_set_style_bg_opa(vol_group, LV_OPA_TRANSP, 0);
-
-  lv_obj_t *vol_icon = lv_label_create(vol_group);
-  lv_label_set_text(vol_icon, LV_SYMBOL_VOLUME_MAX);
-  lv_obj_set_style_text_font(vol_icon, ui_font_builtin(), 0);
-  ui_theme_style_label_accent(vol_icon);
-
-  s_vol_pct_label = lv_label_create(vol_group);
-  lv_label_set_text(s_vol_pct_label, "50%");
-  ui_theme_style_label_secondary(s_vol_pct_label);
-
-  s_active = true;
-  s_last_ui_ms = 0;
-  s_last_vol = 0xFF;
-  s_last_progress = -1;
-  s_last_pos_sec = UINT32_MAX;
-  s_last_dur_sec = UINT32_MAX;
-  s_last_paused = false;
-  s_last_playing = false;
-  s_last_track_index = -1;
-  s_last_track_count = -1;
-  s_last_track_type = AUDIO_TRACK_TYPE_NONE;
-  s_last_sample_rate_hz = UINT32_MAX;
-  s_last_channels = UINT16_MAX;
-  s_last_bits_per_sample = UINT16_MAX;
-  s_last_bitrate_kbps = UINT16_MAX;
-  s_last_is_float = false;
-  s_last_mp3_vbr = false;
-  preview_audio_reset_adjust_repeats();
-  preview_audio_update_ui(true);
-  return true;
-}
-
-/* ------------------------------------------------------------------ open */
-
 static bool preview_audio_open(const char *path, preview_open_args_t *args) {
   if (!path || !args || !args->screen)
     return false;
@@ -738,45 +354,30 @@ static bool preview_audio_open(const char *path, preview_open_args_t *args) {
                                      args->shared_name_stride, args->cwd))
     return false;
   args->shared_names = NULL;
-  if (!preview_audio_build_foreground(args->screen)) {
-    preview_audio_stop_session_internal();
+
+  const char *title  = fm_base_name(path);
+  const char *artist = "";
+
+  if (!audio_ui_build(&s_ui, args->screen, title, artist,
+                       s_play_mode, eq_preset_name(eq_get_preset())))
     return false;
-  }
+  s_active = true;
+  preview_audio_reset_adjust_repeats();
   preview_audio_start_track(path);
 
   return true;
 }
 
-/* ------------------------------------------------------------------ close */
-
-static void preview_audio_close_foreground(void) {
-  ui_chrome_detach(&s_chrome);
-  preview_audio_reset_adjust_repeats();
-  s_active = false;
-  s_tag_title_label = NULL;
-  s_tag_artist_label = NULL;
-  s_tech_label = NULL;
-  s_track_label = NULL;
-  s_time_pos_label = NULL;
-  s_time_dur_label = NULL;
-  s_status_label = NULL;
-  s_progress_bar = NULL;
-  s_vol_pct_label = NULL;
-  s_mode_label = NULL;
-  s_eq_label = NULL;
-  s_lyric_label = NULL;
-  /* Keep s_has_cached_tags — it's needed for restore-foreground. */
-}
-
 static void preview_audio_reset_session_state(void) {
   audio_playlist_free(&s_pl);
-  preview_audio_close_foreground();
+  audio_ui_close(&s_ui);
+  audio_tag_cache_init(&s_tag_cache);
   preview_audio_drop_session_timer();
   s_current_path[0] = '\0';
+  s_active = false;
   s_session_active = false;
   s_close_to_background = false;
   s_track_confirmed_playing = false;
-  s_has_cached_tags = false;
   ui_chrome_set_music_active(false);
 }
 
@@ -791,7 +392,9 @@ static void preview_audio_stop_session_internal(void) {
 
 static void preview_audio_close(void) {
   if (s_close_to_background) {
-    preview_audio_close_foreground();
+    audio_ui_close(&s_ui);
+    s_active = false;
+    preview_audio_reset_adjust_repeats();
     s_close_to_background = false;
     return;
   }
@@ -860,8 +463,7 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
   if (edge[GAMEPAD_INPUT_START]) {
     eq_next_preset();
     hal_settings_save(SettingEqPreset, (int32_t)eq_get_preset());
-    if (s_eq_label && lv_obj_is_valid(s_eq_label))
-      lv_label_set_text(s_eq_label, eq_preset_name(eq_get_preset()));
+    audio_ui_set_eq(&s_ui, eq_preset_name(eq_get_preset()));
     return true;
   }
   if (edge[GAMEPAD_INPUT_A]) {
@@ -878,7 +480,7 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     s_play_mode = (play_mode_t)((s_play_mode + 1) % PLAY_MODE_COUNT);
     if (s_play_mode == PLAY_MODE_SHUFFLE)
       audio_playlist_shuffle_reset(&s_pl, s_pl.current_index);
-    update_mode_label();
+    audio_ui_set_mode(&s_ui, s_play_mode);
     return true;
   }
   if (edge[GAMEPAD_INPUT_MENU]) {
@@ -911,7 +513,6 @@ static void preview_audio_session_tick(bool force_ui) {
     PREVIEW_AUDIO_LOGI("timer: track-end detected, mode=%d idx=%d cnt=%d",
                        s_play_mode, s_pl.current_index, s_pl.count);
     s_track_confirmed_playing = false;
-    s_last_playing = false; /* prevent stale UI state triggering on next tick */
     switch (s_play_mode) {
       case PLAY_MODE_LIST_LOOP:
         preview_audio_play_index((s_pl.current_index + 1) % s_pl.count);
@@ -946,6 +547,8 @@ static void preview_audio_session_timer_cb(lv_timer_t *timer) {
 static void preview_audio_on_timer(void) {
   preview_audio_session_tick(false);
 }
+
+/* ------------------------------------------------------------------ public API */
 
 static const char *preview_audio_current_path(void) {
   return s_session_active ? s_current_path : NULL;
@@ -996,8 +599,18 @@ bool preview_audio_restore_foreground(lv_obj_t *screen, lv_group_t *input_group)
   (void)input_group;
   if (!s_session_active || s_active)
     return false;
-  if (!preview_audio_build_foreground(screen))
+
+  const char *title  = s_tag_cache.has_tags ? s_tag_cache.title
+                                            : fm_base_name(s_current_path);
+  const char *artist = s_tag_cache.has_tags ? s_tag_cache.artist : "";
+
+  if (!audio_ui_build(&s_ui, screen, title, artist,
+                       s_play_mode, eq_preset_name(eq_get_preset())))
     return false;
+  s_active = true;
+  /* Chrome title always shows the file name (not the ID3 tag title). */
+  ui_chrome_set_title(&s_ui.chrome, fm_base_name(s_current_path));
+  preview_audio_reset_adjust_repeats();
   preview_set_active(&preview_audio_app);
   preview_audio_session_tick(true);
   return true;
@@ -1015,11 +628,11 @@ void preview_audio_stop_session(void) {
 /* ------------------------------------------------------------------ export */
 
 const preview_app_t preview_audio_app = {
-    .id       = "audio",
-    .can_open = preview_audio_can_open,
-    .open     = preview_audio_open,
-    .close    = preview_audio_close,
-    .on_key   = preview_audio_on_key,
-    .on_timer = preview_audio_on_timer,
+    .id           = "audio",
+    .can_open     = preview_audio_can_open,
+    .open         = preview_audio_open,
+    .close        = preview_audio_close,
+    .on_key       = preview_audio_on_key,
+    .on_timer     = preview_audio_on_timer,
     .current_path = preview_audio_current_path,
 };
