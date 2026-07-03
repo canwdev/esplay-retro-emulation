@@ -7,6 +7,7 @@
 #include "platform_time.h"
 #include "ui_backlight.h"
 #include "input_repeat.h"
+#include "ui_theme.h"
 
 #ifdef TARGET_SIM
 #include "sim_compat.h"
@@ -22,7 +23,7 @@ static const char *TAG = "preview_bmp";
 
 #define BMP_MIN_SCALE 16U
 #define BMP_MAX_SCALE 1024U
-#define BMP_CANVAS_RESERVE_BYTES      (24U * 1024U)
+#define BMP_CANVAS_RESERVE_BYTES      (8U * 1024U)
 #define BMP_FIT_CANVAS_RESERVE_BYTES  (4U * 1024U)
 
 #define BMP_HDR_SIG           0
@@ -74,6 +75,9 @@ typedef struct {
   uint32_t canvas_scale;
   int32_t cached_row;
   int32_t canvas_tiles;
+  bool fit_mode;
+  lv_obj_t *label_1to1;
+  lv_obj_t *label_status;
   char *shared_names;
   int shared_count;
   int shared_index;
@@ -100,6 +104,9 @@ static uint32_t bmp_zoom_next(uint32_t scale, bool zoom_in);
 static void preview_bmp_close(void);
 static bool bmp_open_document(const char *path);
 static bool bmp_apply_path(const char *path, bool preserve_mode);
+static bool bmp_is_fit_view(void);
+static bool bmp_image_fits_screen(void);
+static bool bmp_should_treat_as_fit(void);
 static const char *preview_bmp_current_path(void);
 
 static uint16_t bmp_u16(const uint8_t *p) {
@@ -267,7 +274,6 @@ static uint32_t bmp_current_canvas_bytes(void) {
 
 static int bmp_tile_count_for_height(lv_coord_t h) {
   if (h <= 160) return BMP_CANVAS_TILES_MIN;
-  if (h <= 240) return 12;
   return BMP_CANVAS_TILES_MAX;
 }
 
@@ -411,13 +417,11 @@ static void bmp_clamp_pan(int32_t draw_w, int32_t draw_h) {
   int32_t min_pan_y = 0;
   if (draw_w > s_state.viewport_w) {
     max_pan_x = (draw_w - s_state.viewport_w) / 2;
-    min_pan_x = (2 * (int32_t)s_state.canvas_w - draw_w -
-                 (int32_t)s_state.viewport_w) / 2;
+    min_pan_x = (int32_t)s_state.canvas_w - draw_w + max_pan_x;
   }
   if (draw_h > s_state.viewport_h) {
     max_pan_y = (draw_h - s_state.viewport_h) / 2;
-    min_pan_y = (2 * (int32_t)s_state.canvas_h - draw_h -
-                 (int32_t)s_state.viewport_h) / 2;
+    min_pan_y = (int32_t)s_state.canvas_h - draw_h + max_pan_y;
   }
 
   if (s_state.pan_x > max_pan_x)
@@ -454,10 +458,18 @@ static bool bmp_ensure_canvas(uint32_t scale) {
     req_w = (req_w * 9) / 10;
     req_h = (req_h * 9) / 10;
   }
+
+  platform_log(PLATFORM_LOG_INFO, TAG,
+               "canvas budget scale=%u req=%dx%d max_bytes=%lu free=%lu current=%lu",
+               (unsigned)scale, (int)req_w, (int)req_h,
+               (unsigned long)max_bytes, (unsigned long)free_heap,
+               (unsigned long)current);
 #endif
 
+  int ntiles_new = bmp_tile_count_for_height(req_h);
+
   if (s_state.canvas_draw_bufs[0] && s_state.canvas_w == req_w &&
-      s_state.canvas_h == req_h) {
+      s_state.canvas_h == req_h && s_state.canvas_tiles == ntiles_new) {
     s_state.canvas_scale = scale;
     return true;
   }
@@ -471,11 +483,10 @@ static bool bmp_ensure_canvas(uint32_t scale) {
 
   bmp_release_canvas();
   
-  int ntiles = bmp_tile_count_for_height(req_h);
-  s_state.canvas_tiles = ntiles;
-  lv_coord_t tile_h = (req_h + ntiles - 1) / ntiles;
+  s_state.canvas_tiles = ntiles_new;
+  lv_coord_t tile_h = (req_h + ntiles_new - 1) / ntiles_new;
   
-  for (int i = 0; i < ntiles; i++) {
+  for (int i = 0; i < ntiles_new; i++) {
     lv_coord_t th = tile_h;
     if (i * tile_h >= req_h) {
       th = 0;
@@ -639,6 +650,26 @@ static bool bmp_apply_transform(void) {
                      (s_state.viewport_h - s_state.canvas_h) / 2 + i * tile_h);
     }
   }
+
+  if (s_state.label_1to1) {
+    if (!bmp_should_treat_as_fit())
+      lv_obj_remove_flag(s_state.label_1to1, LV_OBJ_FLAG_HIDDEN);
+    else
+      lv_obj_add_flag(s_state.label_1to1, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  if (s_state.label_status) {
+    if (bmp_should_treat_as_fit())
+      lv_obj_remove_flag(s_state.label_status, LV_OBJ_FLAG_HIDDEN);
+    else
+      lv_obj_add_flag(s_state.label_status, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  if (s_state.label_1to1)
+    lv_obj_move_foreground(s_state.label_1to1);
+  if (s_state.label_status)
+    lv_obj_move_foreground(s_state.label_status);
+
   return true;
 }
 
@@ -686,14 +717,46 @@ static bool bmp_set_scale(uint32_t scale, bool allow_reduce) {
 
 static bool bmp_reset_view(bool fit_to_screen) {
   if (fit_to_screen) {
-    return bmp_set_scale_with_reserve(s_state.fit_scale, true,
-                                      BMP_FIT_CANVAS_RESERVE_BYTES);
+    if (!bmp_set_scale_with_reserve(s_state.fit_scale, true,
+                                    BMP_FIT_CANVAS_RESERVE_BYTES))
+      return false;
+  } else {
+    if (!bmp_set_scale(LV_SCALE_NONE, false))
+      return false;
   }
-  return bmp_set_scale(LV_SCALE_NONE, false);
+  s_state.fit_mode = fit_to_screen;
+  return true;
 }
 
 static bool bmp_is_fit_view(void) {
-  return s_state.scale == s_state.fit_scale;
+  return s_state.fit_mode;
+}
+
+static bool bmp_image_fits_screen(void) {
+  return s_state.meta.width <= s_state.viewport_w &&
+         s_state.meta.height <= s_state.viewport_h;
+}
+
+static bool bmp_should_treat_as_fit(void) {
+  return bmp_is_fit_view() || bmp_image_fits_screen();
+}
+
+static void bmp_update_status_label(void) {
+  if (!s_state.label_status)
+    return;
+
+  const char *filename = strrchr(s_state.path, '/');
+  if (filename)
+    filename++;
+  else
+    filename = s_state.path;
+
+  if (s_state.shared_count > 1)
+    lv_label_set_text_fmt(s_state.label_status, "[%d/%d] %s",
+                          s_state.shared_index + 1, s_state.shared_count,
+                          filename);
+  else
+    lv_label_set_text_fmt(s_state.label_status, "%s", filename);
 }
 
 static bool preview_bmp_can_open(const char *path) {
@@ -765,6 +828,8 @@ static bool bmp_apply_path(const char *path, bool preserve_mode) {
   bool was_fit = bmp_is_fit_view();
   if (!bmp_open_document(path))
     return false;
+
+  bmp_update_status_label();
 
   if (preserve_mode && !was_fit) {
     if (!bmp_reset_view(false)) {
@@ -838,6 +903,17 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
   lv_obj_set_style_pad_all(args->screen, 0, 0);
   lv_obj_set_style_border_width(args->screen, 0, 0);
 
+  s_state.label_1to1 = lv_label_create(args->screen);
+  lv_label_set_text(s_state.label_1to1, "1:1");
+  ui_theme_style_label_accent(s_state.label_1to1);
+  lv_obj_align(s_state.label_1to1, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
+  lv_obj_add_flag(s_state.label_1to1, LV_OBJ_FLAG_HIDDEN);
+
+  s_state.label_status = lv_label_create(args->screen);
+  ui_theme_style_label_secondary(s_state.label_status);
+  ui_theme_style_label_truncated(s_state.label_status, s_state.viewport_w - 16);
+  lv_obj_align(s_state.label_status, LV_ALIGN_BOTTOM_MID, 0, -4);
+
   s_active = true;
   if (!bmp_apply_path(path, false)) {
     preview_bmp_close();
@@ -851,11 +927,22 @@ static void preview_bmp_close(void) {
   bmp_release_canvas();
   bmp_release_doc();
   bmp_release_shared_list();
+  if (s_state.label_1to1) {
+    lv_obj_delete(s_state.label_1to1);
+    s_state.label_1to1 = NULL;
+  }
+  if (s_state.label_status) {
+    lv_obj_delete(s_state.label_status);
+    s_state.label_status = NULL;
+  }
   memset(&s_state, 0, sizeof(s_state));
   s_active = false;
 }
 
 static void bmp_pan_hold_tick(const input_gamepad_state *gp) {
+  if (bmp_should_treat_as_fit())
+    return;
+
   bool left  = gp->values[GAMEPAD_INPUT_LEFT] == 1;
   bool right = gp->values[GAMEPAD_INPUT_RIGHT] == 1;
   bool up    = gp->values[GAMEPAD_INPUT_UP] == 1;
@@ -920,6 +1007,8 @@ static bool preview_bmp_on_key(const input_gamepad_state *gp, const bool edge[])
   }
   if (edge[GAMEPAD_INPUT_A]) {
     input_repeat_reset(&s_pan_repeat);
+    if (bmp_image_fits_screen())
+      return true;
     if (bmp_is_fit_view()) {
       if (!bmp_reset_view(false))
         platform_log(PLATFORM_LOG_WARN, TAG, "1:1 rejected by memory");
@@ -935,6 +1024,18 @@ static bool preview_bmp_on_key(const input_gamepad_state *gp, const bool edge[])
   }
 
   int32_t step = (int32_t)LV_MAX(16, LV_MIN(s_state.viewport_w, s_state.viewport_h) / 10);
+
+  if (bmp_should_treat_as_fit()) {
+    if (edge[GAMEPAD_INPUT_LEFT]) {
+      bmp_switch_relative(-1);
+      return true;
+    }
+    if (edge[GAMEPAD_INPUT_RIGHT]) {
+      bmp_switch_relative(1);
+      return true;
+    }
+  }
+
   if (edge[GAMEPAD_INPUT_LEFT]) {
     bmp_pan_by(step, 0);
     input_repeat_arm(&s_pan_repeat, GAMEPAD_INPUT_LEFT, lv_tick_get(),
