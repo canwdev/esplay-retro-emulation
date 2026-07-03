@@ -108,12 +108,13 @@ static int16_t apply_volume_i16(int16_t sample) {
   if (v >= 100)
     return sample;
 
-  int32_t s = (int32_t)sample;
-  int32_t scaled = s * v;
-  if (scaled >= 0)
-    scaled = (scaled + 50) / 100;
-  else
-    scaled = (scaled - 50) / 100;
+  /* Non-linear volume curve: gain = (pct / 100)^2
+   * This matches human loudness perception — low values are much quieter,
+   * giving finer control in the quiet-to-medium range. */
+  float gain = (float)v / 100.0f;
+  gain = gain * gain;
+  float fs = (float)sample * gain;
+  int32_t scaled = (int32_t)(fs >= 0.0f ? fs + 0.5f : fs - 0.5f);
 
   if (scaled > 32767)
     scaled = 32767;
