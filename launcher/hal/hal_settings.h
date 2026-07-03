@@ -17,6 +17,7 @@ typedef enum Setting {
   SettingBacklightTimeout,
   SettingMusicSessionArmed,
   SettingMusicSessionPath,
+  SettingEqPreset,
   SettingMax,
 } Setting;
 #endif

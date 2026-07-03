@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "eq.h"
 
 #include "platform_log.h"
 #include "sim_compat.h"
@@ -563,6 +564,7 @@ static bool audio_write_stereo_from_mono(const int16_t *mono, size_t frames) {
     s_stereo_expand[(i - 1) * 2] = sample;
     s_stereo_expand[(i - 1) * 2 + 1] = sample;
   }
+  eq_process_block(s_stereo_expand, frames * 2);
   return audio_write_pcm(s_stereo_expand, frames * 2);
 }
 
@@ -573,6 +575,7 @@ static bool audio_write_stereo_interleaved(int16_t *stereo, size_t samples) {
   uint8_t volume = audio_volume_snapshot();
   for (size_t i = 0; i < samples; i++)
     stereo[i] = apply_volume_i16(stereo[i], volume);
+  eq_process_block(stereo, samples);
   return audio_write_pcm(stereo, samples);
 }
 
@@ -1044,6 +1047,10 @@ uint8_t audio_get_volume(void) {
   audio_unlock();
   return volume;
 }
+
+void audio_set_eq_preset(int preset) { eq_set_preset((eq_preset_t)preset); }
+
+int audio_get_eq_preset(void) { return (int)eq_get_preset(); }
 
 void audio_pause(void) {
   if (!audio_is_playing())

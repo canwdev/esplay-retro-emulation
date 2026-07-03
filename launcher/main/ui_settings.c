@@ -445,6 +445,11 @@ void ui_settings_load_persisted(void) {
 
   hal_display_set_brightness((uint8_t)s_brightness);
   hal_audio_set_volume((uint8_t)s_volume);
+
+  int32_t eq_preset = 0;
+  hal_settings_load(SettingEqPreset, &eq_preset);
+  hal_audio_set_eq_preset(eq_preset);
+
   ui_theme_set((int)s_theme);
 }
 

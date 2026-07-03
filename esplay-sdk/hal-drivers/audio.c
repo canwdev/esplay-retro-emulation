@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "eq.h"
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
@@ -255,6 +256,7 @@ static esp_err_t i2s_write_stereo_from_mono(const int16_t *mono, size_t frames) 
     s_stereo_expand[(i - 1) * 2 + 1] = s;
   }
 
+  eq_process_block(s_stereo_expand, frames * 2);
   return i2s_write_pcm(s_stereo_expand, frames * 2);
 }
 
@@ -265,6 +267,7 @@ static esp_err_t i2s_write_stereo_interleaved(int16_t *stereo, size_t samples) {
   for (size_t i = 0; i < samples; i++)
     stereo[i] = apply_volume_i16(stereo[i]);
 
+  eq_process_block(stereo, samples);
   return i2s_write_pcm(stereo, samples);
 }
 
@@ -904,6 +907,10 @@ void audio_set_volume(uint8_t pct) {
 }
 
 uint8_t audio_get_volume(void) { return s_volume; }
+
+void audio_set_eq_preset(int preset) { eq_set_preset((eq_preset_t)preset); }
+
+int audio_get_eq_preset(void) { return (int)eq_get_preset(); }
 
 void audio_pause(void) {
   if (s_playing && !s_paused) {

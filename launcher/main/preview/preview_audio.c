@@ -1,6 +1,7 @@
 #include "preview_audio.h"
 
 #include "audio.h"
+#include "eq.h"
 #include "file_manager.h"
 #include "hal_settings.h"
 #include "input_bridge.h"
@@ -92,6 +93,7 @@ static lv_obj_t *s_status_label;
 static lv_obj_t *s_progress_bar;
 static lv_obj_t *s_vol_bar;
 static lv_obj_t *s_vol_pct_label;
+static lv_obj_t *s_eq_label;
 static lv_obj_t *s_mode_label;
 static uint32_t  s_last_ui_ms;
 static uint8_t   s_last_vol;
@@ -736,6 +738,10 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
   ui_theme_style_label_secondary(s_mode_label);
 
+  s_eq_label = lv_label_create(status_row);
+  lv_label_set_text(s_eq_label, eq_preset_name(eq_get_preset()));
+  ui_theme_style_label_accent(s_eq_label);
+
   s_time_label = lv_label_create(screen);
   lv_label_set_text(s_time_label, "0:00 / 0:00");
   ui_theme_style_label_secondary(s_time_label);
@@ -831,6 +837,7 @@ static void preview_audio_close_foreground(void) {
   s_vol_bar = NULL;
   s_vol_pct_label = NULL;
   s_mode_label = NULL;
+  s_eq_label = NULL;
 }
 
 static void preview_audio_reset_session_state(void) {
@@ -926,9 +933,16 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
       preview_audio_play_index(s_current_index + 1);
     return true;
   }
-  if (edge[GAMEPAD_INPUT_START] || edge[GAMEPAD_INPUT_A]) {
+  if (edge[GAMEPAD_INPUT_START]) {
+    eq_next_preset();
+    hal_settings_save(SettingEqPreset, (int32_t)eq_get_preset());
+    if (s_eq_label && lv_obj_is_valid(s_eq_label))
+      lv_label_set_text(s_eq_label, eq_preset_name(eq_get_preset()));
+    return true;
+  }
+  if (edge[GAMEPAD_INPUT_A]) {
     bool p = audio_is_paused(), pl = audio_is_playing();
-    PREVIEW_AUDIO_LOGI("key: START/A toggle pause p=%d playing=%d", p, pl);
+    PREVIEW_AUDIO_LOGI("key: A toggle pause p=%d playing=%d", p, pl);
     if (!pl && !p)
       preview_audio_play_index(s_current_index);
     else

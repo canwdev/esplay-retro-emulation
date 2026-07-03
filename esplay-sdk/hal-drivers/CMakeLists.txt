@@ -6,7 +6,8 @@ set(srcs
     "sdcard.c"
     "power.c"
     "settings.c"
-    "audio.c")
+    "audio.c"
+    "eq.c")
 
 idf_component_register(SRCS "${srcs}"
                     INCLUDE_DIRS "${include_dirs}" "."

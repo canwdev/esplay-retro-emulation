@@ -33,6 +33,7 @@ add_executable(launcher_sim
   main.c
   ../port/sim/dirent.c
   ../port/sim/audio_sim.c
+  ../../esplay-sdk/hal-drivers/eq.c
   ../port/sim/hal_audio_stub.c
   ../port/sim/hal_display_sdl.c
   ../port/sim/hal_input_sdl.c

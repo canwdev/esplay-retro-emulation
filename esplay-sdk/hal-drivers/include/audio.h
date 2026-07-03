@@ -23,6 +23,10 @@ bool audio_is_playing(void);
 void audio_set_volume(uint8_t pct);
 uint8_t audio_get_volume(void);
 
+/* Software EQ presets (see eq.h for preset list) */
+void audio_set_eq_preset(int preset);
+int  audio_get_eq_preset(void);
+
 void audio_pause(void);
 void audio_resume(void);
 void audio_toggle_pause(void);

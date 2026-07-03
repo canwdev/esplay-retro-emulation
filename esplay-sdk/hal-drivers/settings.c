@@ -38,12 +38,12 @@ static nvs_handle_t handle; // Handle type changed to nvs_handle_t in modern IDF
 
 static KeyType settings_types[SettingMax] = {
     TypeInt, TypeInt, TypeInt, TypeStr, TypeInt, TypeInt,
-    TypeInt, TypeInt, TypeInt, TypeInt, TypeStr};
+    TypeInt, TypeInt, TypeInt, TypeInt, TypeStr, TypeInt};
 
 static const char *settings_keys[SettingMax] = {
     "volume",      "backlight", "playmode", "rom_name",
     "scale",       "wifi",      "scale_alg","ui_theme",
-    "bl_timeout",  "music_arm", "music_path"};
+    "bl_timeout",  "music_arm", "music_path", "eq_preset"};
 
 /**********************
  * GLOBAL FUNCTIONS
