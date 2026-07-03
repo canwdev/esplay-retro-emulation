@@ -6,6 +6,7 @@
 #include "platform_log.h"
 #include "platform_time.h"
 #include "ui_backlight.h"
+#include "input_repeat.h"
 
 #ifdef TARGET_SIM
 #include "sim_compat.h"
@@ -83,6 +84,17 @@ typedef struct {
 static bmp_state_t s_state;
 static lv_obj_t *s_canvases[BMP_CANVAS_TILES_MAX];
 static bool s_active;
+
+#define BMP_PAN_ACCEL_EVERY  4
+#define BMP_PAN_MAX_SCALE    8
+
+static input_repeat_state_t s_pan_repeat;
+static const input_repeat_config_t s_bmp_pan_repeat = {
+    .initial_delay_ms = 400,
+    .repeat_delay_ms = 80,
+    .accel_every = BMP_PAN_ACCEL_EVERY,
+    .max_scale = BMP_PAN_MAX_SCALE,
+};
 
 static uint32_t bmp_zoom_next(uint32_t scale, bool zoom_in);
 static void preview_bmp_close(void);
@@ -394,20 +406,28 @@ static bool bmp_load_row(int32_t src_y) {
 
 static void bmp_clamp_pan(int32_t draw_w, int32_t draw_h) {
   int32_t max_pan_x = 0;
+  int32_t min_pan_x = 0;
   int32_t max_pan_y = 0;
-  if (draw_w > s_state.viewport_w)
+  int32_t min_pan_y = 0;
+  if (draw_w > s_state.viewport_w) {
     max_pan_x = (draw_w - s_state.viewport_w) / 2;
-  if (draw_h > s_state.viewport_h)
+    min_pan_x = (2 * (int32_t)s_state.canvas_w - draw_w -
+                 (int32_t)s_state.viewport_w) / 2;
+  }
+  if (draw_h > s_state.viewport_h) {
     max_pan_y = (draw_h - s_state.viewport_h) / 2;
+    min_pan_y = (2 * (int32_t)s_state.canvas_h - draw_h -
+                 (int32_t)s_state.viewport_h) / 2;
+  }
 
   if (s_state.pan_x > max_pan_x)
     s_state.pan_x = max_pan_x;
-  if (s_state.pan_x < -max_pan_x)
-    s_state.pan_x = -max_pan_x;
+  if (s_state.pan_x < min_pan_x)
+    s_state.pan_x = min_pan_x;
   if (s_state.pan_y > max_pan_y)
     s_state.pan_y = max_pan_y;
-  if (s_state.pan_y < -max_pan_y)
-    s_state.pan_y = -max_pan_y;
+  if (s_state.pan_y < min_pan_y)
+    s_state.pan_y = min_pan_y;
 }
 
 static bool bmp_ensure_canvas(uint32_t scale) {
@@ -798,6 +818,7 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
   lv_coord_t viewport_w = HAL_DISPLAY_WIDTH;
   lv_coord_t viewport_h = HAL_DISPLAY_HEIGHT;
 
+  input_repeat_reset(&s_pan_repeat);
   memset(&s_state, 0, sizeof(s_state));
   s_state.viewport_w = viewport_w;
   s_state.viewport_h = viewport_h;
@@ -826,11 +847,50 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
 }
 
 static void preview_bmp_close(void) {
+  input_repeat_reset(&s_pan_repeat);
   bmp_release_canvas();
   bmp_release_doc();
   bmp_release_shared_list();
   memset(&s_state, 0, sizeof(s_state));
   s_active = false;
+}
+
+static void bmp_pan_hold_tick(const input_gamepad_state *gp) {
+  bool left  = gp->values[GAMEPAD_INPUT_LEFT] == 1;
+  bool right = gp->values[GAMEPAD_INPUT_RIGHT] == 1;
+  bool up    = gp->values[GAMEPAD_INPUT_UP] == 1;
+  bool down  = gp->values[GAMEPAD_INPUT_DOWN] == 1;
+
+  int held_count = (left ? 1 : 0) + (right ? 1 : 0) +
+                   (up ? 1 : 0) + (down ? 1 : 0);
+  if (held_count != 1) {
+    input_repeat_reset(&s_pan_repeat);
+    return;
+  }
+
+  uint32_t dir = 0;
+  if (left)  dir = GAMEPAD_INPUT_LEFT;
+  if (right) dir = GAMEPAD_INPUT_RIGHT;
+  if (up)    dir = GAMEPAD_INPUT_UP;
+  if (down)  dir = GAMEPAD_INPUT_DOWN;
+
+  uint32_t now = lv_tick_get();
+  uint16_t repeat_count = 0;
+  if (!input_repeat_tick(&s_pan_repeat, true, dir, now,
+                         &s_bmp_pan_repeat, &repeat_count))
+    return;
+
+  int scale = input_repeat_scale_for_count(&s_bmp_pan_repeat, repeat_count);
+  int32_t step = (int32_t)LV_MAX(16, LV_MIN(s_state.viewport_w,
+                                             s_state.viewport_h) / 10);
+  if (dir == GAMEPAD_INPUT_LEFT)
+    bmp_pan_by(step * scale, 0);
+  else if (dir == GAMEPAD_INPUT_RIGHT)
+    bmp_pan_by(-step * scale, 0);
+  else if (dir == GAMEPAD_INPUT_UP)
+    bmp_pan_by(0, step * scale);
+  else if (dir == GAMEPAD_INPUT_DOWN)
+    bmp_pan_by(0, -step * scale);
 }
 
 static bool preview_bmp_on_key(const input_gamepad_state *gp, const bool edge[]) {
@@ -839,21 +899,27 @@ static bool preview_bmp_on_key(const input_gamepad_state *gp, const bool edge[])
     return false;
 
   if (edge[GAMEPAD_INPUT_MENU]) {
+    input_repeat_reset(&s_pan_repeat);
     ui_backlight_toggle();
     return true;
   }
-  if (!ui_backlight_is_on())
+  if (!ui_backlight_is_on()) {
+    input_repeat_reset(&s_pan_repeat);
     return false;
+  }
 
   if (edge[GAMEPAD_INPUT_L]) {
+    input_repeat_reset(&s_pan_repeat);
     bmp_switch_relative(-1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_R]) {
+    input_repeat_reset(&s_pan_repeat);
     bmp_switch_relative(1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_A]) {
+    input_repeat_reset(&s_pan_repeat);
     if (bmp_is_fit_view()) {
       if (!bmp_reset_view(false))
         platform_log(PLATFORM_LOG_WARN, TAG, "1:1 rejected by memory");
@@ -864,27 +930,37 @@ static bool preview_bmp_on_key(const input_gamepad_state *gp, const bool edge[])
     return true;
   }
   if (edge[GAMEPAD_INPUT_START]) {
+    input_repeat_reset(&s_pan_repeat);
     return true;
   }
 
   int32_t step = (int32_t)LV_MAX(16, LV_MIN(s_state.viewport_w, s_state.viewport_h) / 10);
   if (edge[GAMEPAD_INPUT_LEFT]) {
     bmp_pan_by(step, 0);
+    input_repeat_arm(&s_pan_repeat, GAMEPAD_INPUT_LEFT, lv_tick_get(),
+                     &s_bmp_pan_repeat);
     return true;
   }
   if (edge[GAMEPAD_INPUT_RIGHT]) {
     bmp_pan_by(-step, 0);
+    input_repeat_arm(&s_pan_repeat, GAMEPAD_INPUT_RIGHT, lv_tick_get(),
+                     &s_bmp_pan_repeat);
     return true;
   }
   if (edge[GAMEPAD_INPUT_UP]) {
     bmp_pan_by(0, step);
+    input_repeat_arm(&s_pan_repeat, GAMEPAD_INPUT_UP, lv_tick_get(),
+                     &s_bmp_pan_repeat);
     return true;
   }
   if (edge[GAMEPAD_INPUT_DOWN]) {
     bmp_pan_by(0, -step);
+    input_repeat_arm(&s_pan_repeat, GAMEPAD_INPUT_DOWN, lv_tick_get(),
+                     &s_bmp_pan_repeat);
     return true;
   }
 
+  bmp_pan_hold_tick(gp);
   return false;
 }
 
