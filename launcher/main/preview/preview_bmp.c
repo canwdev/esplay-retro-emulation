@@ -24,6 +24,21 @@ static const char *TAG = "preview_bmp";
 #define BMP_CANVAS_RESERVE_BYTES      (24U * 1024U)
 #define BMP_FIT_CANVAS_RESERVE_BYTES  (4U * 1024U)
 
+#define BMP_HDR_SIG           0
+#define BMP_HDR_FILE_SIZE     2
+#define BMP_HDR_DATA_OFFSET  10
+#define BMP_HDR_DIB_SIZE     14
+#define BMP_HDR_WIDTH        18
+#define BMP_HDR_HEIGHT       22
+#define BMP_HDR_PLANES       26
+#define BMP_HDR_BPP          28
+#define BMP_HDR_COMPRESSION  30
+#define BMP_HDR_SIZE          54
+
+#define BMP_SCALE_FP  16
+
+typedef uint16_t (*bmp_decode_fn)(const uint8_t *src);
+
 typedef struct {
   int32_t width;
   int32_t height;
@@ -35,7 +50,8 @@ typedef struct {
   bool top_down;
 } bmp_meta_t;
 
-#define BMP_CANVAS_TILES 12
+#define BMP_CANVAS_TILES_MAX  16
+#define BMP_CANVAS_TILES_MIN   8
 
 typedef struct {
   char path[FM_PATH_MAX];
@@ -43,7 +59,9 @@ typedef struct {
   bmp_meta_t meta;
   FILE *file;
   uint8_t *row_buf;
-  lv_draw_buf_t *canvas_draw_bufs[BMP_CANVAS_TILES];
+  bmp_decode_fn decode_fn;
+  uint8_t pixel_bytes;
+  lv_draw_buf_t *canvas_draw_bufs[BMP_CANVAS_TILES_MAX];
   uint32_t scale;
   uint32_t fit_scale;
   int32_t pan_x;
@@ -54,6 +72,7 @@ typedef struct {
   lv_coord_t canvas_h;
   uint32_t canvas_scale;
   int32_t cached_row;
+  int32_t canvas_tiles;
   char *shared_names;
   int shared_count;
   int shared_index;
@@ -62,7 +81,7 @@ typedef struct {
 } bmp_state_t;
 
 static bmp_state_t s_state;
-static lv_obj_t *s_canvases[BMP_CANVAS_TILES];
+static lv_obj_t *s_canvases[BMP_CANVAS_TILES_MAX];
 static bool s_active;
 
 static uint32_t bmp_zoom_next(uint32_t scale, bool zoom_in);
@@ -120,7 +139,7 @@ static uint32_t bmp_measure_file_size(FILE *f) {
 }
 
 static bool bmp_load_meta(FILE *f, const char *path, bmp_meta_t *meta) {
-  uint8_t header[54];
+  uint8_t header[BMP_HDR_SIZE];
   uint64_t need_size;
   if (fseek(f, 0, SEEK_SET) != 0)
     return false;
@@ -130,18 +149,18 @@ static bool bmp_load_meta(FILE *f, const char *path, bmp_meta_t *meta) {
     return false;
   }
 
-  if (header[0] != 'B' || header[1] != 'M') {
+  if (header[BMP_HDR_SIG] != 'B' || header[BMP_HDR_SIG + 1] != 'M') {
     platform_log(PLATFORM_LOG_WARN, TAG, "not a bmp file: %s", path);
     return false;
   }
 
-  uint32_t dib_size = bmp_u32(&header[14]);
-  int32_t width = bmp_s32(&header[18]);
-  int32_t height = bmp_s32(&header[22]);
-  uint16_t planes = bmp_u16(&header[26]);
-  uint16_t bpp = bmp_u16(&header[28]);
-  uint32_t compression = bmp_u32(&header[30]);
-  uint32_t data_offset = bmp_u32(&header[10]);
+  uint32_t dib_size = bmp_u32(&header[BMP_HDR_DIB_SIZE]);
+  int32_t width = bmp_s32(&header[BMP_HDR_WIDTH]);
+  int32_t height = bmp_s32(&header[BMP_HDR_HEIGHT]);
+  uint16_t planes = bmp_u16(&header[BMP_HDR_PLANES]);
+  uint16_t bpp = bmp_u16(&header[BMP_HDR_BPP]);
+  uint32_t compression = bmp_u32(&header[BMP_HDR_COMPRESSION]);
+  uint32_t data_offset = bmp_u32(&header[BMP_HDR_DATA_OFFSET]);
   bool top_down = false;
 
   if (height < 0) {
@@ -150,7 +169,7 @@ static bool bmp_load_meta(FILE *f, const char *path, bmp_meta_t *meta) {
   }
 
   if (dib_size < 40 || width <= 0 || height <= 0 || planes != 1 ||
-      data_offset < 54) {
+      data_offset < BMP_HDR_SIZE) {
     platform_log(PLATFORM_LOG_WARN, TAG, "unsupported bmp header: %s", path);
     return false;
   }
@@ -225,7 +244,7 @@ static uint32_t bmp_canvas_bytes(lv_coord_t w, lv_coord_t h) {
 
 static uint32_t bmp_current_canvas_bytes(void) {
   uint32_t total = 0;
-  for (int i = 0; i < BMP_CANVAS_TILES; i++) {
+  for (int i = 0; i < s_state.canvas_tiles; i++) {
     if (s_state.canvas_draw_bufs[i])
       total += s_state.canvas_draw_bufs[i]->data_size;
   }
@@ -233,6 +252,12 @@ static uint32_t bmp_current_canvas_bytes(void) {
 }
 
 
+
+static int bmp_tile_count_for_height(lv_coord_t h) {
+  if (h <= 160) return BMP_CANVAS_TILES_MIN;
+  if (h <= 240) return 12;
+  return BMP_CANVAS_TILES_MAX;
+}
 
 static bool bmp_scale_fits_budget_with_reserve(uint32_t scale,
                                                uint32_t reserve_bytes) {
@@ -244,7 +269,8 @@ static bool bmp_scale_fits_budget_with_reserve(uint32_t scale,
   lv_coord_t req_h = LV_MIN(draw_h, s_state.viewport_h);
 
   uint32_t need = bmp_canvas_bytes(req_w, req_h);
-  lv_coord_t tile_h = (req_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
+  int ntiles = bmp_tile_count_for_height(req_h);
+  lv_coord_t tile_h = (req_h + ntiles - 1) / ntiles;
   uint32_t tile_need = bmp_canvas_bytes(req_w, tile_h);
 
 #ifdef TARGET_SIM
@@ -277,20 +303,16 @@ static uint32_t bmp_scale_fit_budget_with_reserve(uint32_t scale,
   return cur;
 }
 
-static lv_color_t bmp_decode_pixel_16(const uint8_t *src) {
+static uint16_t bmp_decode_16(const uint8_t *src) {
   uint16_t v = bmp_u16(src);
   uint8_t r = (uint8_t)(((v >> 11) & 0x1F) << 3);
   uint8_t g = (uint8_t)(((v >> 5) & 0x3F) << 2);
   uint8_t b = (uint8_t)((v & 0x1F) << 3);
-  return lv_color_make(r, g, b);
+  return lv_color_to_u16(lv_color_make(r, g, b));
 }
 
-static lv_color_t bmp_decode_pixel(const uint8_t *src, uint16_t bpp) {
-  if (bpp == 16)
-    return bmp_decode_pixel_16(src);
-  if (bpp == 24)
-    return lv_color_make(src[2], src[1], src[0]);
-  return lv_color_make(src[2], src[1], src[0]);
+static uint16_t bmp_decode_24(const uint8_t *src) {
+  return lv_color_to_u16(lv_color_make(src[2], src[1], src[0]));
 }
 
 static void bmp_release_doc(void) {
@@ -311,7 +333,7 @@ static void bmp_release_shared_list(void) {
 }
 
 static void bmp_release_canvas(void) {
-  for (int i = 0; i < BMP_CANVAS_TILES; i++) {
+  for (int i = 0; i < s_state.canvas_tiles; i++) {
     if (s_state.canvas_draw_bufs[i]) {
       lv_draw_buf_destroy(s_state.canvas_draw_bufs[i]);
       s_state.canvas_draw_bufs[i] = NULL;
@@ -423,16 +445,17 @@ static bool bmp_ensure_canvas(uint32_t scale) {
   need = bmp_canvas_bytes(req_w, req_h);
   current = bmp_current_canvas_bytes();
 
-  /* Shrinking can safely free the old canvas first to reduce heap pressure. */
   if (s_state.canvas_draw_bufs[0] && need <= current) {
     bmp_release_canvas();
   }
 
   bmp_release_canvas();
   
-  lv_coord_t tile_h = (req_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
+  int ntiles = bmp_tile_count_for_height(req_h);
+  s_state.canvas_tiles = ntiles;
+  lv_coord_t tile_h = (req_h + ntiles - 1) / ntiles;
   
-  for (int i = 0; i < BMP_CANVAS_TILES; i++) {
+  for (int i = 0; i < ntiles; i++) {
     lv_coord_t th = tile_h;
     if (i * tile_h >= req_h) {
       th = 0;
@@ -442,7 +465,7 @@ static bool bmp_ensure_canvas(uint32_t scale) {
     
     if (th > 0) {
       lv_draw_buf_t *draw_buf = lv_draw_buf_create((uint32_t)req_w, (uint32_t)th,
-                                                   LV_COLOR_FORMAT_NATIVE, LV_STRIDE_AUTO);
+                                                    LV_COLOR_FORMAT_NATIVE, LV_STRIDE_AUTO);
       if (!draw_buf) {
         platform_log(PLATFORM_LOG_WARN, TAG,
                      "alloc failed for tile %d row=%lu th=%d largest=%lu free=%lu scale=%u",
@@ -491,43 +514,76 @@ static bool bmp_render_canvas(void) {
   }
 
   s_state.cached_row = -1;
-  
-  lv_coord_t tile_h = (s_state.canvas_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
-  
-  for (int t = 0; t < BMP_CANVAS_TILES; t++) {
-    lv_draw_buf_t *draw_buf = s_state.canvas_draw_bufs[t];
-    if (!draw_buf) continue;
-    
-    lv_draw_buf_clear(draw_buf, NULL);
-    
-    lv_coord_t th = draw_buf->header.h;
-    
-    for (int32_t y = 0; y < th; ++y) {
-      int32_t global_y = t * tile_h + y;
-      int32_t scaled_y = global_y + view_off_y;
-      int32_t src_y = ((int64_t)scaled_y * s_state.meta.height) / draw_h;
-      
-      uint16_t *dst = (uint16_t *)((uint8_t *)draw_buf->data +
-                                   (size_t)y * draw_buf->header.stride);
 
-      if (src_y < 0) src_y = 0;
-      if (src_y >= s_state.meta.height) src_y = s_state.meta.height - 1;
-      if (!bmp_load_row(src_y)) return false;
+  int ntiles = s_state.canvas_tiles;
+  lv_coord_t tile_h = (s_state.canvas_h + ntiles - 1) / ntiles;
+  bool is_1to1 = (s_state.canvas_scale == LV_SCALE_NONE);
+  uint8_t px_bytes = s_state.pixel_bytes;
+  bmp_decode_fn decode = s_state.decode_fn;
 
-      for (int32_t x = 0; x < s_state.canvas_w; ++x) {
-        int32_t scaled_x = x + view_off_x;
-        int32_t src_x = ((int64_t)scaled_x * s_state.meta.width) / draw_w;
-        
-        if (src_x < 0) src_x = 0;
-        if (src_x >= s_state.meta.width) src_x = s_state.meta.width - 1;
-        
-        const uint8_t *src = s_state.row_buf + src_x * (s_state.meta.bpp / 8);
-        dst[x] = lv_color_to_u16(bmp_decode_pixel(src, s_state.meta.bpp));
+  if (is_1to1) {
+    int32_t src_start_x = view_off_x;
+    for (int t = 0; t < ntiles; t++) {
+      lv_draw_buf_t *draw_buf = s_state.canvas_draw_bufs[t];
+      if (!draw_buf) continue;
+      lv_draw_buf_clear(draw_buf, NULL);
+      lv_coord_t th = draw_buf->header.h;
+
+      for (int32_t y = 0; y < th; ++y) {
+        int32_t global_y = t * tile_h + y;
+        int32_t src_y = global_y + view_off_y;
+        if (src_y < 0) src_y = 0;
+        if (src_y >= s_state.meta.height) src_y = s_state.meta.height - 1;
+        if (!bmp_load_row(src_y)) return false;
+
+        uint16_t *dst = (uint16_t *)((uint8_t *)draw_buf->data +
+                                      (size_t)y * draw_buf->header.stride);
+        int32_t src_x = src_start_x;
+        for (int32_t x = 0; x < s_state.canvas_w; ++x) {
+          int32_t sx = src_x;
+          if (sx < 0) sx = 0;
+          else if (sx >= s_state.meta.width) sx = s_state.meta.width - 1;
+          dst[x] = decode(s_state.row_buf + (size_t)sx * px_bytes);
+          src_x++;
+        }
       }
+      lv_draw_buf_flush_cache(draw_buf, NULL);
+      if (s_canvases[t]) lv_obj_invalidate(s_canvases[t]);
+      platform_sleep_ms(1);
     }
-    lv_draw_buf_flush_cache(draw_buf, NULL);
-    if (s_canvases[t]) lv_obj_invalidate(s_canvases[t]);
-    platform_sleep_ms(1);
+  } else {
+    uint32_t step_x = ((uint64_t)s_state.meta.width << BMP_SCALE_FP) / (uint64_t)draw_w;
+    uint32_t acc_x0 = (uint32_t)((int64_t)view_off_x * (int64_t)step_x);
+    for (int t = 0; t < ntiles; t++) {
+      lv_draw_buf_t *draw_buf = s_state.canvas_draw_bufs[t];
+      if (!draw_buf) continue;
+      lv_draw_buf_clear(draw_buf, NULL);
+      lv_coord_t th = draw_buf->header.h;
+
+      for (int32_t y = 0; y < th; ++y) {
+        int32_t global_y = t * tile_h + y;
+        int32_t scaled_y = global_y + view_off_y;
+        int32_t src_y = ((int64_t)scaled_y * s_state.meta.height) / draw_h;
+        if (src_y < 0) src_y = 0;
+        if (src_y >= s_state.meta.height) src_y = s_state.meta.height - 1;
+        if (!bmp_load_row(src_y)) return false;
+
+        uint16_t *dst = (uint16_t *)((uint8_t *)draw_buf->data +
+                                      (size_t)y * draw_buf->header.stride);
+        int32_t max_src_x = s_state.meta.width - 1;
+        uint32_t acc_x = acc_x0;
+        for (int32_t x = 0; x < s_state.canvas_w; ++x) {
+          int32_t sx = (int32_t)(acc_x >> BMP_SCALE_FP);
+          acc_x += step_x;
+          if (sx < 0) sx = 0;
+          else if (sx > max_src_x) sx = max_src_x;
+          dst[x] = decode(s_state.row_buf + (size_t)sx * px_bytes);
+        }
+      }
+      lv_draw_buf_flush_cache(draw_buf, NULL);
+      if (s_canvases[t]) lv_obj_invalidate(s_canvases[t]);
+      platform_sleep_ms(1);
+    }
   }
   return true;
 }
@@ -555,8 +611,9 @@ static bool bmp_apply_transform(void) {
     return false;
   }
   
-  lv_coord_t tile_h = (s_state.canvas_h + BMP_CANVAS_TILES - 1) / BMP_CANVAS_TILES;
-  for (int i = 0; i < BMP_CANVAS_TILES; i++) {
+  int ntiles = s_state.canvas_tiles;
+  lv_coord_t tile_h = (s_state.canvas_h + ntiles - 1) / ntiles;
+  for (int i = 0; i < ntiles; i++) {
     if (s_canvases[i] && s_state.canvas_draw_bufs[i]) {
       lv_obj_set_pos(s_canvases[i], (s_state.viewport_w - s_state.canvas_w) / 2,
                      (s_state.viewport_h - s_state.canvas_h) / 2 + i * tile_h);
@@ -666,6 +723,10 @@ static bool bmp_open_document(const char *path) {
   s_state.file = file;
   s_state.row_buf = row_buf;
   s_state.meta = meta;
+  s_state.decode_fn = (meta.bpp == 16) ? bmp_decode_16 : bmp_decode_24;
+  s_state.pixel_bytes = (uint8_t)(meta.bpp / 8);
+  s_state.canvas_tiles = bmp_tile_count_for_height(LV_MIN(
+      bmp_scaled_dim(meta.height, fit_scale), s_state.viewport_h));
   s_state.fit_scale = fit_scale;
   s_state.cached_row = -1;
   strncpy(s_state.path, path, sizeof(s_state.path) - 1);
@@ -740,6 +801,7 @@ static bool preview_bmp_open(const char *path, preview_open_args_t *args) {
   memset(&s_state, 0, sizeof(s_state));
   s_state.viewport_w = viewport_w;
   s_state.viewport_h = viewport_h;
+  s_state.canvas_tiles = bmp_tile_count_for_height(viewport_h);
   s_state.screen = args->screen;
   if (args->cwd)
     strlcpy(s_state.cwd, args->cwd, sizeof(s_state.cwd));
