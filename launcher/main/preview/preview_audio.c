@@ -438,7 +438,7 @@ static void preview_audio_update_ui(bool force) {
   if (s_track_label && lv_obj_is_valid(s_track_label) && s_playlist_count > 0)
     if (force || s_last_track_index != s_current_index ||
         s_last_track_count != s_playlist_count) {
-      lv_label_set_text_fmt(s_track_label, "%d / %d", s_current_index + 1,
+      lv_label_set_text_fmt(s_track_label, "%d/%d", s_current_index + 1,
                             s_playlist_count);
       s_last_track_index = s_current_index;
       s_last_track_count = s_playlist_count;
@@ -794,7 +794,7 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   ui_theme_style_bar(s_progress_bar);
   lv_obj_align(s_progress_bar, LV_ALIGN_BOTTOM_MID, 0, -22);
 
-  /* ---- info row (start-aligned, spacer pushes vol right) ---- */
+  /* ---- info row (justify-between via spacers, vol icon+% grouped) ---- */
   lv_obj_t *info_row = lv_obj_create(screen);
   lv_obj_remove_style_all(info_row);
   lv_obj_set_size(info_row, LV_PCT(100), 22);
@@ -806,29 +806,46 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_obj_set_style_pad_column(info_row, 4, 0);
 
   s_track_label = lv_label_create(info_row);
-  lv_label_set_text(s_track_label, "1 / 1");
+  lv_label_set_text(s_track_label, "1/1");
   ui_theme_style_label_secondary(s_track_label);
 
   s_mode_label = lv_label_create(info_row);
   lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
   ui_theme_style_label_secondary(s_mode_label);
 
+  /* spacer between left group and eq */
+  lv_obj_t *sp1 = lv_obj_create(info_row);
+  lv_obj_remove_style_all(sp1);
+  lv_obj_set_flex_grow(sp1, 1);
+  lv_obj_set_height(sp1, 1);
+
   s_eq_label = lv_label_create(info_row);
   lv_label_set_text(s_eq_label, eq_preset_name(eq_get_preset()));
   ui_theme_style_label_accent(s_eq_label);
 
-  /* spacer pushes volume group to the right */
-  lv_obj_t *spacer = lv_obj_create(info_row);
-  lv_obj_remove_style_all(spacer);
-  lv_obj_set_flex_grow(spacer, 1);
-  lv_obj_set_height(spacer, 1);
+  /* spacer between eq and volume group */
+  lv_obj_t *sp2 = lv_obj_create(info_row);
+  lv_obj_remove_style_all(sp2);
+  lv_obj_set_flex_grow(sp2, 1);
+  lv_obj_set_height(sp2, 1);
 
-  lv_obj_t *vol_icon = lv_label_create(info_row);
+  /* volume group: icon + % together */
+  lv_obj_t *vol_group = lv_obj_create(info_row);
+  lv_obj_set_size(vol_group, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(vol_group, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(vol_group, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_all(vol_group, 0, 0);
+  lv_obj_set_style_pad_column(vol_group, 2, 0);
+  lv_obj_set_style_border_width(vol_group, 0, 0);
+  lv_obj_set_style_bg_opa(vol_group, LV_OPA_TRANSP, 0);
+
+  lv_obj_t *vol_icon = lv_label_create(vol_group);
   lv_label_set_text(vol_icon, LV_SYMBOL_VOLUME_MAX);
   lv_obj_set_style_text_font(vol_icon, ui_font_builtin(), 0);
   ui_theme_style_label_accent(vol_icon);
 
-  s_vol_pct_label = lv_label_create(info_row);
+  s_vol_pct_label = lv_label_create(vol_group);
   lv_label_set_text(s_vol_pct_label, "50%");
   ui_theme_style_label_secondary(s_vol_pct_label);
 
