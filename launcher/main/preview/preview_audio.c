@@ -728,7 +728,7 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_obj_t *card = lv_obj_create(screen);
   lv_obj_remove_style_all(card);
   ui_theme_style_panel(card);
-  lv_obj_set_size(card, LV_PCT(98), 144);
+  lv_obj_set_size(card, LV_PCT(98), 160);
   lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top());
   lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
@@ -769,7 +769,7 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_obj_t *time_row = lv_obj_create(screen);
   lv_obj_remove_style_all(time_row);
   lv_obj_set_size(time_row, LV_PCT(100), 22);
-  lv_obj_align(time_row, LV_ALIGN_BOTTOM_MID, 0, -30);
+  lv_obj_align(time_row, LV_ALIGN_BOTTOM_MID, 0, -34);
   lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -809,11 +809,17 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_label_set_text(s_track_label, "1/1");
   ui_theme_style_label_secondary(s_track_label);
 
+  /* spacer between track and mode */
+  lv_obj_t *sp0 = lv_obj_create(info_row);
+  lv_obj_remove_style_all(sp0);
+  lv_obj_set_flex_grow(sp0, 1);
+  lv_obj_set_height(sp0, 1);
+
   s_mode_label = lv_label_create(info_row);
   lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
   ui_theme_style_label_secondary(s_mode_label);
 
-  /* spacer between left group and eq */
+  /* spacer between mode and eq */
   lv_obj_t *sp1 = lv_obj_create(info_row);
   lv_obj_remove_style_all(sp1);
   lv_obj_set_flex_grow(sp1, 1);
