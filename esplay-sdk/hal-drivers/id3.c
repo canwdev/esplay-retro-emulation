@@ -45,13 +45,17 @@ static uint32_t be_u32(const uint8_t *p) {
 static size_t latin1_to_utf8(const uint8_t *src, size_t len, char *dst,
                              size_t dst_sz) {
   size_t w = 0;
-  for (size_t i = 0; i < len && w + 2 < dst_sz; i++) {
+  for (size_t i = 0; i < len; i++) {
     uint8_t c = src[i];
     if (c == 0)
       continue;
     if (c < 0x80) {
+      if (w + 1 >= dst_sz)
+        break;
       dst[w++] = (char)c;
     } else {
+      if (w + 2 >= dst_sz)
+        break;
       dst[w++] = (char)(0xC0 | (c >> 6));
       dst[w++] = (char)(0x80 | (c & 0x3F));
     }
@@ -84,7 +88,7 @@ static size_t utf16_to_utf8(const uint8_t *src, size_t len, uint8_t enc,
     }
   }
 
-  while (off + 1 < len && w + 4 < dst_sz) {
+  while (off + 1 < len && w < dst_sz) {
     uint32_t cp;
     uint16_t u = le ? (uint16_t)(src[off] | (src[off + 1] << 8))
                     : (uint16_t)((src[off] << 8) | src[off + 1]);
@@ -103,17 +107,21 @@ static size_t utf16_to_utf8(const uint8_t *src, size_t len, uint8_t enc,
       cp = u;
     }
 
-    /* encode codepoint → UTF-8 */
+    /* encode codepoint → UTF-8; check dst room per width */
     if (cp < 0x80) {
+      if (w + 1 > dst_sz) break;
       dst[w++] = (char)cp;
     } else if (cp < 0x800) {
+      if (w + 2 > dst_sz) break;
       dst[w++] = (char)(0xC0 | (cp >> 6));
       dst[w++] = (char)(0x80 | (cp & 0x3F));
     } else if (cp < 0x10000) {
+      if (w + 3 > dst_sz) break;
       dst[w++] = (char)(0xE0 | (cp >> 12));
       dst[w++] = (char)(0x80 | ((cp >> 6) & 0x3F));
       dst[w++] = (char)(0x80 | (cp & 0x3F));
     } else {
+      if (w + 4 > dst_sz) break;
       dst[w++] = (char)(0xF0 | (cp >> 18));
       dst[w++] = (char)(0x80 | ((cp >> 12) & 0x3F));
       dst[w++] = (char)(0x80 | ((cp >> 6) & 0x3F));
@@ -137,11 +145,25 @@ static void decode_text(const uint8_t *data, size_t len, char *out,
   const uint8_t *text = data + 1;
   size_t tlen = len - 1;
 
-  /* trim trailing nulls */
-  while (tlen > 0 && text[tlen - 1] == 0)
-    tlen--;
+  /* trim trailing nulls — byte-wise for 8-bit encodings,
+   * 2-byte code-unit-wise for UTF-16 so we never split a
+   * surrogate or ASCII character whose high byte is 0x00. */
+  if (enc == 0x01 || enc == 0x02) {
+    while (tlen >= 2 && text[tlen - 2] == 0 && text[tlen - 1] == 0)
+      tlen -= 2;
+  } else {
+    while (tlen > 0 && text[tlen - 1] == 0)
+      tlen--;
+  }
   if (tlen == 0)
     return;
+
+  /* debug: dump last 4 bytes of raw text and final len */
+  printf("[id3] decode_text: enc=%u len=%u tlen=%u last4=",
+         (unsigned)enc, (unsigned)len, (unsigned)tlen);
+  for (int di = (int)tlen > 4 ? (int)tlen - 4 : 0; di < (int)tlen; di++)
+    printf("%02X ", text[di]);
+  printf("\n");
 
   switch (enc) {
   case 0x03: /* UTF-8 */
