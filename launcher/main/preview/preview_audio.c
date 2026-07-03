@@ -471,41 +471,46 @@ static void preview_audio_update_ui(bool force) {
                      ti.is_float != s_last_is_float ||
                      ti.mp3_vbr != s_last_mp3_vbr;
       if (changed) {
-        uint32_t sr10  = ti.sample_rate_hz / 100;
-        uint32_t sr_i  = sr10 / 10;
-        uint32_t sr_f  = sr10 % 10;
-        if (ti.type == AUDIO_TRACK_TYPE_MP3) {
-          if (ti.bitrate_kbps > 0 && ti.mp3_vbr)
-            lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %ukbps VBR %uch",
-                                  (unsigned long)sr_i, (unsigned long)sr_f,
-                                  (unsigned)ti.bitrate_kbps,
-                                  (unsigned)ti.channels);
-          else if (ti.bitrate_kbps > 0)
-            lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %ukbps %uch",
-                                  (unsigned long)sr_i, (unsigned long)sr_f,
-                                  (unsigned)ti.bitrate_kbps,
-                                  (unsigned)ti.channels);
-          else
-            lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %uch",
-                                  (unsigned long)sr_i, (unsigned long)sr_f,
-                                  (unsigned)ti.channels);
-        } else if (ti.type == AUDIO_TRACK_TYPE_WAV) {
-          if (ti.is_float && ti.bits_per_sample > 0)
-            lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz F%u %uch",
-                                  (unsigned long)sr_i, (unsigned long)sr_f,
-                                  (unsigned)ti.bits_per_sample,
-                                  (unsigned)ti.channels);
-          else if (ti.bits_per_sample > 0)
-            lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz %ub %uch",
-                                  (unsigned long)sr_i, (unsigned long)sr_f,
-                                  (unsigned)ti.bits_per_sample,
-                                  (unsigned)ti.channels);
-          else
-            lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz %uch",
-                                  (unsigned long)sr_i, (unsigned long)sr_f,
-                                  (unsigned)ti.channels);
+        if (ti.sample_rate_hz > 0) {
+          uint32_t sr10  = ti.sample_rate_hz / 100;
+          uint32_t sr_i  = sr10 / 10;
+          uint32_t sr_f  = sr10 % 10;
+          if (ti.type == AUDIO_TRACK_TYPE_MP3) {
+            if (ti.bitrate_kbps > 0 && ti.mp3_vbr)
+              lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %ukbps VBR %uch",
+                                    (unsigned long)sr_i, (unsigned long)sr_f,
+                                    (unsigned)ti.bitrate_kbps,
+                                    (unsigned)ti.channels);
+            else if (ti.bitrate_kbps > 0)
+              lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %ukbps %uch",
+                                    (unsigned long)sr_i, (unsigned long)sr_f,
+                                    (unsigned)ti.bitrate_kbps,
+                                    (unsigned)ti.channels);
+            else
+              lv_label_set_text_fmt(s_tech_label, "MP3 %lu.%lukHz %uch",
+                                    (unsigned long)sr_i, (unsigned long)sr_f,
+                                    (unsigned)ti.channels);
+          } else if (ti.type == AUDIO_TRACK_TYPE_WAV) {
+            if (ti.is_float && ti.bits_per_sample > 0)
+              lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz F%u %uch",
+                                    (unsigned long)sr_i, (unsigned long)sr_f,
+                                    (unsigned)ti.bits_per_sample,
+                                    (unsigned)ti.channels);
+            else if (ti.bits_per_sample > 0)
+              lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz %ub %uch",
+                                    (unsigned long)sr_i, (unsigned long)sr_f,
+                                    (unsigned)ti.bits_per_sample,
+                                    (unsigned)ti.channels);
+            else
+              lv_label_set_text_fmt(s_tech_label, "WAV %lu.%lukHz %uch",
+                                    (unsigned long)sr_i, (unsigned long)sr_f,
+                                    (unsigned)ti.channels);
+          } else {
+            lv_label_set_text(s_tech_label, "N/A");
+          }
         } else {
-          lv_label_set_text(s_tech_label, "");
+          /* track info not yet available (stopped / not playing) */
+          lv_label_set_text(s_tech_label, "Track info not yet available (stopped / not playing)");
         }
 
         s_last_track_type      = ti.type;
