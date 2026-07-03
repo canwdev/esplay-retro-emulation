@@ -21,6 +21,7 @@ typedef struct {
   char title[128];
   char artist[128];
   char album[128];
+  char lyrics[4096];  /* USLT / ULT frame text, may contain LRC timestamps */
 } mp3_tags_t;
 
 /**

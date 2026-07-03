@@ -227,7 +227,10 @@ static bool read_id3v2(FILE *f, mp3_tags_t *out) {
       break;
 
     uint32_t fsize = (ver >= 4) ? synchsafe_u32(fhdr + 4) : be_u32(fhdr + 4);
-    if (fsize == 0 || fsize > 4096 || offset + fsize > end) {
+    /* allow larger frames for USLT (embedded lyrics can exceed 4 KB) */
+    uint32_t max_fsize = (memcmp(fhdr, "USLT", 4) == 0 ||
+                          memcmp(fhdr, "ULT", 3) == 0) ? 16384u : 4096u;
+    if (fsize == 0 || fsize > max_fsize || offset + fsize > end) {
       /* skip remainder, padding likely */
       break;
     }
@@ -247,13 +250,61 @@ static bool read_id3v2(FILE *f, mp3_tags_t *out) {
                memcmp(fhdr, "TAL", 3) == 0) {
       dest = out->album;
       dest_sz = sizeof(out->album);
+    } else if (memcmp(fhdr, "USLT", 4) == 0 ||
+               memcmp(fhdr, "ULT", 3) == 0) {
+      dest = out->lyrics;
+      dest_sz = sizeof(out->lyrics);
     }
 
     if (dest && dest_sz) {
       uint8_t *buf = malloc(fsize);
       if (buf && fread(buf, 1, fsize, f) == fsize) {
-        decode_text(buf, fsize, dest, dest_sz);
-        found = true;
+        if (dest == out->lyrics) {
+          /* USLT frame: encoding(1) + language(3) +
+           * content_descriptor(0-term) + lyrics_text */
+          /* printf("[id3] USLT frame fsize=%lu enc=%u\n", */
+          /*        (unsigned long)fsize, (unsigned)buf[0]); */
+          uint8_t enc   = buf[0];
+          size_t  off   = 4; /* skip encoding + language */
+          if (enc == 0x01 || enc == 0x02) {
+            /* UTF-16: 2-byte null terminator */
+            while (off + 1 < fsize) {
+              if (buf[off] == 0 && buf[off + 1] == 0) {
+                off += 2;
+                break;
+              }
+              off += 2;
+            }
+          } else {
+            /* Latin-1 / UTF-8: 1-byte null terminator */
+            while (off < fsize && buf[off] != 0)
+              off++;
+            if (off < fsize)
+              off++;
+          }
+          if (off < fsize) {
+            /* reconstruct [enc][lyrics_text] for decode_text() */
+            size_t   text_len = fsize - off;
+            uint8_t *tmp = malloc(text_len + 1);
+            if (tmp) {
+              tmp[0] = enc;
+              memcpy(tmp + 1, buf + off, text_len);
+              decode_text(tmp, text_len + 1, dest, dest_sz);
+              free(tmp);
+              found = true;
+              /* printf("[id3] USLT lyrics decoded, len=%u\n", */
+              /*        (unsigned)strlen(dest)); */
+            } else {
+              printf("[id3] USLT malloc failed for tmp buf\n");
+            }
+          } else {
+            printf("[id3] USLT no text after descriptor (off=%u >= fsize=%lu)\n",
+                   (unsigned)off, (unsigned long)fsize);
+          }
+        } else {
+          decode_text(buf, fsize, dest, dest_sz);
+          found = true;
+        }
       }
       free(buf);
     } else {

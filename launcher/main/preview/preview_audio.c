@@ -120,6 +120,17 @@ static play_mode_t s_play_mode;
 static bool s_track_confirmed_playing;
 static input_repeat_state_t s_volume_repeat;
 static input_repeat_state_t s_seek_repeat;
+#define LRC_MAX_LINES 64
+static int       s_lrc_count;
+static uint32_t  s_lrc_times[LRC_MAX_LINES];
+static uint16_t  s_lrc_text_off[LRC_MAX_LINES];
+static uint16_t  s_lrc_text_len[LRC_MAX_LINES];
+static char      s_lrc_raw[4096];
+static int       s_last_lrc_index;
+static uint32_t  s_last_lrc_displayed_ms;
+static lv_obj_t *s_lyric_label;
+static void preview_audio_parse_lrc(const char *lyrics);
+static int  preview_audio_find_lrc_index(uint32_t pos_ms);
 static const char *preview_audio_current_path(void);
 static void preview_audio_close_foreground(void);
 static void preview_audio_reset_session_state(void);
@@ -523,6 +534,50 @@ static void preview_audio_update_ui(bool force) {
       }
     }
   }
+
+  /* ---- lyric line ---- */
+  if (s_lyric_label && lv_obj_is_valid(s_lyric_label)) {
+    uint32_t pos_ms = audio_get_position_ms();
+    int idx = preview_audio_find_lrc_index(pos_ms);
+    if (idx >= 0 && s_lrc_times[idx] != s_last_lrc_displayed_ms) {
+      /* merge consecutive lines sharing the same timestamp (bilingual).
+       * find_lrc_index returns the LAST index with this timestamp,
+       * so scan backward to find the first. */
+      int start = idx;
+      while (start > 0 && s_lrc_times[start - 1] == s_lrc_times[idx])
+        start--;
+      int end = idx;
+      while (end + 1 < s_lrc_count &&
+             s_lrc_times[end + 1] == s_lrc_times[idx])
+        end++;
+
+      char tmp[512];
+      int off = 0;
+      for (int i = start; i <= end && off < (int)sizeof(tmp) - 1; i++) {
+        if (i > start) {
+          tmp[off++] = '\n';
+        }
+        uint16_t len = s_lrc_text_len[i];
+        if (off + len > (int)sizeof(tmp) - 1)
+          len = (uint16_t)(sizeof(tmp) - 1 - off);
+        memcpy(tmp + off, s_lrc_raw + s_lrc_text_off[i], len);
+        off += len;
+      }
+      tmp[off] = '\0';
+
+      /* PREVIEW_AUDIO_LOGI("LRC update: pos=%lums t=%lums idx=%d..%d/%d \"%s\"", */
+      /*                    (unsigned long)pos_ms, */
+      /*                    (unsigned long)s_lrc_times[idx], */
+      /*                    start, end, s_lrc_count, tmp); */
+      lv_label_set_text(s_lyric_label, tmp);
+      s_last_lrc_displayed_ms = s_lrc_times[idx];
+    } else if (idx < 0 && s_last_lrc_displayed_ms != UINT32_MAX) {
+      /* PREVIEW_AUDIO_LOGI("LRC update: pos=%lums no match, clearing", */
+      /*                    (unsigned long)pos_ms); */
+      s_last_lrc_displayed_ms = UINT32_MAX;
+      lv_label_set_text(s_lyric_label, "");
+    }
+  }
 }
 
 static void preview_audio_apply_volume_delta(int delta) {
@@ -653,6 +708,18 @@ static void preview_audio_start_track(const char *path) {
     }
   }
 
+  /* parse built-in LRC lyrics */
+  /* PREVIEW_AUDIO_LOGI("start_track: has_tags=%d lyrics[0]=0x%02x lyrics_len=%u", */
+  /*                    has_tags, (unsigned char)tags.lyrics[0], */
+  /*                    tags.lyrics[0] ? (unsigned)strlen(tags.lyrics) : 0); */
+  /* always clear previous lyric before loading new one */
+  if (s_lyric_label && lv_obj_is_valid(s_lyric_label))
+    lv_label_set_text(s_lyric_label, "");
+  if (has_tags && tags.lyrics[0])
+    preview_audio_parse_lrc(tags.lyrics);
+  else
+    preview_audio_parse_lrc(NULL);
+
   bool now_playing = audio_is_playing();
   PREVIEW_AUDIO_LOGI("start_track EXIT: now_playing=%d has_tags=%d",
                      now_playing, has_tags);
@@ -720,6 +787,172 @@ static bool preview_audio_prepare_session(const char *path, char *shared_names,
   return true;
 }
 
+/* ------------------------------------------------------------------ LRC */
+
+/* Strip <mm:ss.xx> or <mm:ss> word-level timestamps in-place.
+ * Returns the new (possibly shorter) string length. */
+static size_t strip_word_timestamps(char *s) {
+  char *src = s, *dst = s;
+  while (*src) {
+    if (*src == '<' && src[1] >= '0' && src[1] <= '9') {
+      char *p   = src + 1;
+      int  d    = 0; /* digit count */
+      int  c    = 0; /* colon count */
+      while (*p && ((*p >= '0' && *p <= '9') || *p == ':' || *p == '.')) {
+        if (*p >= '0' && *p <= '9') d++;
+        if (*p == ':') c++;
+        p++;
+      }
+      if (*p == '>' && c >= 1 && d >= 2) {
+        src = p + 1; /* skip entire <timestamp> tag */
+        continue;
+      }
+    }
+    *dst++ = *src++;
+  }
+  *dst = '\0';
+  return (size_t)(dst - s);
+}
+
+static void preview_audio_parse_lrc(const char *lyrics) {
+  s_lrc_count            = 0;
+  s_last_lrc_index       = -1;
+  s_last_lrc_displayed_ms = UINT32_MAX;
+  if (!lyrics || lyrics[0] == '\0') {
+    /* PREVIEW_AUDIO_LOGI("LRC: no lyrics text (NULL or empty)"); */
+    return;
+  }
+
+  size_t raw_len = strlen(lyrics);
+  /* PREVIEW_AUDIO_LOGI("LRC: got lyrics, len=%u, head=%.80s", */
+  /*                    (unsigned)raw_len, lyrics); */
+
+  if (raw_len >= sizeof(s_lrc_raw)) {
+    PREVIEW_AUDIO_LOGW("LRC: lyrics too large (%u >= %u), truncating",
+                       (unsigned)raw_len, (unsigned)sizeof(s_lrc_raw));
+  }
+  strlcpy(s_lrc_raw, lyrics, sizeof(s_lrc_raw));
+
+  /* strip UTF-8 BOM (0xEF 0xBB 0xBF) if present */
+  if ((unsigned char)s_lrc_raw[0] == 0xEF &&
+      (unsigned char)s_lrc_raw[1] == 0xBB &&
+      (unsigned char)s_lrc_raw[2] == 0xBF) {
+    memmove(s_lrc_raw, s_lrc_raw + 3, strlen(s_lrc_raw + 3) + 1);
+    /* PREVIEW_AUDIO_LOGI("LRC: stripped UTF-8 BOM"); */
+  }
+
+  /* strip word-level <mm:ss.xx> timestamps before parsing */
+  size_t stripped_len = strip_word_timestamps(s_lrc_raw);
+  if (stripped_len != raw_len) {
+    /* PREVIEW_AUDIO_LOGI("LRC: stripped word timestamps, len %u -> %u", */
+    /*                    (unsigned)raw_len, (unsigned)stripped_len); */
+  }
+
+  /* parse [mm:ss.xx] timestamps */
+  char *p = s_lrc_raw;
+  while (*p && s_lrc_count < LRC_MAX_LINES) {
+    /* skip to next '[' */
+    while (*p && *p != '[')
+      p++;
+    if (*p == '\0')
+      break;
+
+    char *ts_start = p + 1;
+    char *ts_end   = ts_start;
+    while (*ts_end && *ts_end != ']')
+      ts_end++;
+    if (*ts_end != ']' || ts_end == ts_start) {
+      p++;
+      continue;
+    }
+
+    /* parse [mm:ss.xx] or [mm:ss] */
+    *ts_end = '\0';
+    int min = 0, sec = 0, cs = 0;
+    bool valid = false;
+    char *dot  = strchr(ts_start, '.');
+    if (dot) {
+      *dot     = '\0';
+      if (sscanf(ts_start, "%d:%d", &min, &sec) == 2) {
+        cs    = atoi(dot + 1);
+        valid = true;
+      }
+      *dot = '.';
+    } else if (sscanf(ts_start, "%d:%d", &min, &sec) == 2) {
+      cs    = 0;
+      valid = true;
+    }
+    *ts_end = ']';
+    if (!valid) {
+      p = ts_end + 1;
+      continue;
+    }
+
+    /* text after ']' until end-of-line or next '[' */
+    char *text = ts_end + 1;
+    while (*text == ' ')
+      text++;
+    char *text_end = text;
+    while (*text_end && *text_end != '\r' && *text_end != '\n' &&
+           *text_end != '[')
+      text_end++;
+    while (text_end > text && text_end[-1] == ' ')
+      text_end--;
+
+    if (text_end > text) {
+      s_lrc_times[s_lrc_count]    = (uint32_t)(min * 60000 + sec * 1000 + cs * 10);
+      s_lrc_text_off[s_lrc_count] = (uint16_t)(text - s_lrc_raw);
+      s_lrc_text_len[s_lrc_count] = (uint16_t)(text_end - text);
+      /* PREVIEW_AUDIO_LOGI("LRC[%d]: t=%lums \"%.*s\"", */
+      /*                    s_lrc_count, (unsigned long)s_lrc_times[s_lrc_count], */
+      /*                    (int)s_lrc_text_len[s_lrc_count], */
+      /*                    s_lrc_raw + s_lrc_text_off[s_lrc_count]); */
+      s_lrc_count++;
+    }
+    p = text_end;
+  }
+
+  if (s_lrc_count >= LRC_MAX_LINES) {
+    PREVIEW_AUDIO_LOGW("LRC: hit line limit %d, some lines dropped", LRC_MAX_LINES);
+  }
+
+  /* fallback: no timestamps found → show entire text from start */
+  if (s_lrc_count == 0) {
+    PREVIEW_AUDIO_LOGW("LRC: no timestamps found, showing raw text as fallback");
+    char *text = s_lrc_raw;
+    while (*text == '\r' || *text == '\n' || *text == ' ')
+      text++;
+    if (*text) {
+      s_lrc_times[0]    = 0;
+      s_lrc_text_off[0] = (uint16_t)(text - s_lrc_raw);
+      size_t tlen       = strlen(text);
+      while (tlen > 0 && (text[tlen - 1] == '\r' || text[tlen - 1] == '\n' ||
+                          text[tlen - 1] == ' '))
+        tlen--;
+      s_lrc_text_len[0] = (uint16_t)tlen;
+      s_lrc_count       = 1;
+    }
+  }
+
+  /* PREVIEW_AUDIO_LOGI("LRC: parsed %d lines total", s_lrc_count); */
+}
+
+static int preview_audio_find_lrc_index(uint32_t pos_ms) {
+  if (s_lrc_count == 0)
+    return -1;
+
+  int idx = s_last_lrc_index;
+  if (idx < 0 || idx >= s_lrc_count)
+    idx = 0;
+
+  while (idx > 0 && s_lrc_times[idx] > pos_ms)
+    idx--;
+  while (idx + 1 < s_lrc_count && s_lrc_times[idx + 1] <= pos_ms)
+    idx++;
+
+  return (s_lrc_times[idx] <= pos_ms) ? idx : -1;
+}
+
 static bool preview_audio_build_foreground(lv_obj_t *screen) {
   if (!screen)
     return false;
@@ -764,6 +997,13 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_label_set_long_mode(s_tech_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
   lv_label_set_text(s_tech_label, "");
   ui_theme_style_label_secondary(s_tech_label);
+
+  /* lyric line (auto-wrap, hidden when empty) */
+  s_lyric_label = lv_label_create(card);
+  lv_obj_set_width(s_lyric_label, LV_PCT(100));
+  lv_label_set_long_mode(s_lyric_label, LV_LABEL_LONG_MODE_WRAP);
+  lv_label_set_text(s_lyric_label, "");
+  ui_theme_style_label_accent(s_lyric_label);
 
   /* filler stretches card to fill remaining space (flex:1) */
   lv_obj_t *card_fill = lv_obj_create(card);
@@ -922,6 +1162,7 @@ static void preview_audio_close_foreground(void) {
   s_vol_pct_label = NULL;
   s_mode_label = NULL;
   s_eq_label = NULL;
+  s_lyric_label = NULL;
 }
 
 static void preview_audio_reset_session_state(void) {
