@@ -90,10 +90,10 @@ static lv_obj_t *s_tag_title_label;
 static lv_obj_t *s_tag_artist_label;
 static lv_obj_t *s_tech_label;
 static lv_obj_t *s_track_label;
-static lv_obj_t *s_time_label;
+static lv_obj_t *s_time_pos_label;
+static lv_obj_t *s_time_dur_label;
 static lv_obj_t *s_status_label;
 static lv_obj_t *s_progress_bar;
-static lv_obj_t *s_vol_bar;
 static lv_obj_t *s_vol_pct_label;
 static lv_obj_t *s_eq_label;
 static lv_obj_t *s_mode_label;
@@ -384,10 +384,10 @@ static void preview_audio_update_ui(bool force) {
   /* No point updating widgets the user cannot see. */
   if (!ui_backlight_is_on())
     return;
-  if (!s_progress_bar || !s_vol_bar || !s_time_label || !s_status_label)
+  if (!s_progress_bar || !s_time_pos_label || !s_status_label)
     return;
-  if (!lv_obj_is_valid(s_progress_bar) || !lv_obj_is_valid(s_vol_bar) ||
-      !lv_obj_is_valid(s_time_label) || !lv_obj_is_valid(s_status_label))
+  if (!lv_obj_is_valid(s_progress_bar) ||
+      !lv_obj_is_valid(s_time_pos_label) || !lv_obj_is_valid(s_status_label))
     return;
   if (!force) {
     uint32_t now = lv_tick_get();
@@ -412,21 +412,25 @@ static void preview_audio_update_ui(bool force) {
   uint8_t vol         = audio_get_volume();
   bool    vol_changed = force || vol != s_last_vol;
   if (vol_changed) {
-    lv_bar_set_value(s_vol_bar, vol, LV_ANIM_OFF);
     s_last_vol = vol;
+    if (s_vol_pct_label && lv_obj_is_valid(s_vol_pct_label))
+      lv_label_set_text_fmt(s_vol_pct_label, LV_SYMBOL_VOLUME_MAX " %u%%", vol);
   }
-  if (vol_changed && s_vol_pct_label && lv_obj_is_valid(s_vol_pct_label))
-    lv_label_set_text_fmt(s_vol_pct_label, "%u%%", vol);
 
   uint32_t pos_sec = pos / 1000;
   uint32_t dur_sec = dur / 1000;
-  if (force || pos_sec != s_last_pos_sec || dur_sec != s_last_dur_sec) {
-    lv_label_set_text_fmt(s_time_label, "%lu:%02lu / %lu:%02lu",
-                          (unsigned long)(pos_sec / 60),
-                          (unsigned long)(pos_sec % 60),
-                          (unsigned long)(dur_sec / 60),
-                          (unsigned long)(dur_sec % 60));
+  if (force || pos_sec != s_last_pos_sec) {
+    if (s_time_pos_label && lv_obj_is_valid(s_time_pos_label))
+      lv_label_set_text_fmt(s_time_pos_label, "%lu:%02lu",
+                            (unsigned long)(pos_sec / 60),
+                            (unsigned long)(pos_sec % 60));
     s_last_pos_sec = pos_sec;
+  }
+  if (force || dur_sec != s_last_dur_sec) {
+    if (s_time_dur_label && lv_obj_is_valid(s_time_dur_label))
+      lv_label_set_text_fmt(s_time_dur_label, "%lu:%02lu",
+                            (unsigned long)(dur_sec / 60),
+                            (unsigned long)(dur_sec % 60));
     s_last_dur_sec = dur_sec;
   }
 
@@ -610,21 +614,22 @@ static void preview_audio_seek_hold_tick(const input_gamepad_state *gp) {
 /* ------------------------------------------------------------------ playback */
 
 static void preview_audio_start_track(const char *path) {
-  bool was_playing = audio_is_playing();
-  PREVIEW_AUDIO_LOGI("start_track ENTER: path=%s was_playing=%d",
-                     path, was_playing);
+  PREVIEW_AUDIO_LOGI("start_track ENTER: path=%s", path);
   strlcpy(s_current_path, path, sizeof(s_current_path));
   s_track_confirmed_playing = false;
+
+  /* ---- Read ID3 tags before starting audio (avoids file access race) ---- */
+  const char *bn = fm_base_name(path);
+  mp3_tags_t tags;
+  memset(&tags, 0, sizeof(tags));
+  bool has_tags = mp3_read_tags(path, &tags);
+
   preview_audio_ensure_session_timer();
   preview_audio_persist_state(true);
   audio_play_file_async(path);
-  bool now_playing = audio_is_playing();
 
-  const char *bn = fm_base_name(path);
   ui_chrome_set_title(&s_chrome, bn);
 
-  mp3_tags_t tags;
-  bool has_tags = mp3_read_tags(path, &tags);
   if (s_tag_title_label && lv_obj_is_valid(s_tag_title_label))
     lv_label_set_text(s_tag_title_label,
                       has_tags && tags.title[0] ? tags.title : bn);
@@ -642,7 +647,9 @@ static void preview_audio_start_track(const char *path) {
     }
   }
 
-  PREVIEW_AUDIO_LOGI("start_track EXIT: now_playing=%d", now_playing);
+  bool now_playing = audio_is_playing();
+  PREVIEW_AUDIO_LOGI("start_track EXIT: now_playing=%d has_tags=%d",
+                     now_playing, has_tags);
   preview_audio_update_ui(true);
 }
 
@@ -720,7 +727,7 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_obj_t *card = lv_obj_create(screen);
   lv_obj_remove_style_all(card);
   ui_theme_style_panel(card);
-  lv_obj_set_size(card, 308, 140);
+  lv_obj_set_size(card, 308, 100);
   lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 2);
   lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
@@ -746,64 +753,61 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_label_set_text(s_tech_label, "");
   ui_theme_style_label_secondary(s_tech_label);
 
-  lv_obj_t *status_row = lv_obj_create(card);
-  lv_obj_remove_style_all(status_row);
-  lv_obj_set_width(status_row, 288);
-  lv_obj_set_flex_flow(status_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(status_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(status_row, 4, 0);
+  /* ---- time row: pos / status / dur (space-between) ---- */
+  lv_obj_t *time_row = lv_obj_create(screen);
+  lv_obj_remove_style_all(time_row);
+  lv_obj_set_size(time_row, LV_PCT(100), 22);
+  lv_obj_align(time_row, LV_ALIGN_BOTTOM_MID, 0, -50);
+  lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_hor(time_row, 8, 0);
 
-  s_track_label = lv_label_create(status_row);
-  lv_label_set_text(s_track_label, "1 / 1");
-  ui_theme_style_label_secondary(s_track_label);
+  s_time_pos_label = lv_label_create(time_row);
+  lv_label_set_text(s_time_pos_label, "0:00");
+  ui_theme_style_label_secondary(s_time_pos_label);
 
-  s_status_label = lv_label_create(status_row);
+  s_status_label = lv_label_create(time_row);
   lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
   ui_theme_style_label_primary(s_status_label);
 
-  s_mode_label = lv_label_create(status_row);
+  s_time_dur_label = lv_label_create(time_row);
+  lv_label_set_text(s_time_dur_label, "0:00");
+  ui_theme_style_label_secondary(s_time_dur_label);
+
+  /* ---- progress bar ---- */
+  s_progress_bar = lv_bar_create(screen);
+  lv_obj_set_size(s_progress_bar, LV_PCT(90), 10);
+  lv_bar_set_range(s_progress_bar, 0, 100);
+  ui_theme_style_bar(s_progress_bar);
+  lv_obj_align(s_progress_bar, LV_ALIGN_BOTTOM_MID, 0, -32);
+
+  /* ---- info row: track / mode / eq … vol, space-between ---- */
+  lv_obj_t *info_row = lv_obj_create(screen);
+  lv_obj_remove_style_all(info_row);
+  lv_obj_set_size(info_row, LV_PCT(100), 22);
+  lv_obj_align(info_row, LV_ALIGN_BOTTOM_MID, 0, -6);
+  lv_obj_set_flex_flow(info_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(info_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_hor(info_row, 8, 0);
+
+  s_track_label = lv_label_create(info_row);
+  lv_label_set_text(s_track_label, "1 / 1");
+  ui_theme_style_label_secondary(s_track_label);
+
+  s_mode_label = lv_label_create(info_row);
   lv_label_set_text(s_mode_label, play_mode_text(s_play_mode));
   ui_theme_style_label_secondary(s_mode_label);
 
-  s_eq_label = lv_label_create(status_row);
+  s_eq_label = lv_label_create(info_row);
   lv_label_set_text(s_eq_label, eq_preset_name(eq_get_preset()));
   ui_theme_style_label_accent(s_eq_label);
 
-  s_time_label = lv_label_create(screen);
-  lv_label_set_text(s_time_label, "0:00 / 0:00");
-  ui_theme_style_label_secondary(s_time_label);
-  lv_obj_align(s_time_label, LV_ALIGN_BOTTOM_LEFT, 8, -50);
-
-  s_progress_bar = lv_bar_create(screen);
-  lv_obj_set_size(s_progress_bar, 308, 10);
-  lv_bar_set_range(s_progress_bar, 0, 100);
-  ui_theme_style_bar(s_progress_bar);
-  lv_obj_align(s_progress_bar, LV_ALIGN_BOTTOM_MID, 0, -34);
-
-  lv_obj_t *vol_row = lv_obj_create(screen);
-  lv_obj_remove_style_all(vol_row);
-  lv_obj_set_size(vol_row, 308, 22);
-  lv_obj_align(vol_row, LV_ALIGN_BOTTOM_MID, 0, -8);
-  lv_obj_set_flex_flow(vol_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(vol_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(vol_row, 6, 0);
-
-  lv_obj_t *vol_lbl = lv_label_create(vol_row);
-  lv_label_set_text(vol_lbl, LV_SYMBOL_VOLUME_MAX);
-  ui_theme_style_label_accent(vol_lbl);
-
-  s_vol_bar = lv_bar_create(vol_row);
-  lv_obj_set_size(s_vol_bar, 210, 10);
-  lv_bar_set_range(s_vol_bar, 0, 100);
-  ui_theme_style_bar(s_vol_bar);
-  lv_obj_set_flex_grow(s_vol_bar, 1);
-
-  s_vol_pct_label = lv_label_create(vol_row);
-  lv_label_set_text(s_vol_pct_label, "50%");
+  /* volume: icon + pct in one label */
+  s_vol_pct_label = lv_label_create(info_row);
+  lv_label_set_text_fmt(s_vol_pct_label, LV_SYMBOL_VOLUME_MAX " %u%%", 50);
   ui_theme_style_label_secondary(s_vol_pct_label);
-  lv_obj_set_width(s_vol_pct_label, 42);
 
   s_active = true;
   s_last_ui_ms = 0;
@@ -860,10 +864,10 @@ static void preview_audio_close_foreground(void) {
   s_tag_artist_label = NULL;
   s_tech_label = NULL;
   s_track_label = NULL;
-  s_time_label = NULL;
+  s_time_pos_label = NULL;
+  s_time_dur_label = NULL;
   s_status_label = NULL;
   s_progress_bar = NULL;
-  s_vol_bar = NULL;
   s_vol_pct_label = NULL;
   s_mode_label = NULL;
   s_eq_label = NULL;

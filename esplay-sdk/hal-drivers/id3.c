@@ -13,6 +13,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ---- platform fopen (UTF-8 paths on Windows) ------------------------- */
+#ifdef _WIN32
+#include <windows.h>
+static FILE *id3_fopen(const char *path, const char *mode) {
+  wchar_t wpath[1024];
+  wchar_t wmode[32];
+  if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, 1024) <= 0)
+    return NULL;
+  if (MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode, 32) <= 0)
+    return NULL;
+  return _wfopen(wpath, wmode);
+}
+#else
+#define id3_fopen(path, mode) fopen(path, mode)
+#endif
+
 /* ------------------------------------------------------------------ helpers */
 
 static uint32_t synchsafe_u32(const uint8_t *p) {
@@ -257,7 +273,7 @@ bool mp3_read_tags(const char *path, mp3_tags_t *out) {
 
   memset(out, 0, sizeof(*out));
 
-  FILE *f = fopen(path, "rb");
+  FILE *f = id3_fopen(path, "rb");
   if (!f)
     return false;
 
