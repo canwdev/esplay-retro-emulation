@@ -7,7 +7,8 @@ set(srcs
     "power.c"
     "settings.c"
     "audio.c"
-    "eq.c")
+    "eq.c"
+    "id3.c")
 
 idf_component_register(SRCS "${srcs}"
                     INCLUDE_DIRS "${include_dirs}" "."

@@ -2,6 +2,7 @@
 
 #include "audio.h"
 #include "eq.h"
+#include "id3.h"
 #include "file_manager.h"
 #include "hal_settings.h"
 #include "input_bridge.h"
@@ -85,7 +86,8 @@ static bool s_close_to_background;
 static lv_timer_t *s_session_timer;
 
 static ui_chrome_t s_chrome;
-static lv_obj_t *s_filename_label;
+static lv_obj_t *s_tag_title_label;
+static lv_obj_t *s_tag_artist_label;
 static lv_obj_t *s_tech_label;
 static lv_obj_t *s_track_label;
 static lv_obj_t *s_time_label;
@@ -617,8 +619,29 @@ static void preview_audio_start_track(const char *path) {
   preview_audio_persist_state(true);
   audio_play_file_async(path);
   bool now_playing = audio_is_playing();
-  if (s_filename_label && lv_obj_is_valid(s_filename_label))
-    lv_label_set_text(s_filename_label, fm_base_name(path));
+
+  const char *bn = fm_base_name(path);
+  ui_chrome_set_title(&s_chrome, bn);
+
+  mp3_tags_t tags;
+  bool has_tags = mp3_read_tags(path, &tags);
+  if (s_tag_title_label && lv_obj_is_valid(s_tag_title_label))
+    lv_label_set_text(s_tag_title_label,
+                      has_tags && tags.title[0] ? tags.title : bn);
+  if (s_tag_artist_label && lv_obj_is_valid(s_tag_artist_label)) {
+    if (has_tags && (tags.artist[0] || tags.album[0])) {
+      if (tags.artist[0] && tags.album[0])
+        lv_label_set_text_fmt(s_tag_artist_label, "%s - %s",
+                              tags.artist, tags.album);
+      else if (tags.artist[0])
+        lv_label_set_text(s_tag_artist_label, tags.artist);
+      else
+        lv_label_set_text(s_tag_artist_label, tags.album);
+    } else {
+      lv_label_set_text(s_tag_artist_label, "");
+    }
+  }
+
   PREVIEW_AUDIO_LOGI("start_track EXIT: now_playing=%d", now_playing);
   preview_audio_update_ui(true);
 }
@@ -705,12 +728,17 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_obj_set_style_pad_all(card, 4, 0);
   lv_obj_set_style_pad_row(card, 0, 0);
 
-  s_filename_label = lv_label_create(card);
-  lv_obj_set_width(s_filename_label, 288);
-  lv_obj_set_height(s_filename_label, 36);
-  lv_label_set_long_mode(s_filename_label, LV_LABEL_LONG_MODE_WRAP);
-  lv_label_set_text(s_filename_label, fm_base_name(s_current_path));
-  ui_theme_style_label_primary(s_filename_label);
+  s_tag_title_label = lv_label_create(card);
+  lv_obj_set_width(s_tag_title_label, 288);
+  lv_label_set_long_mode(s_tag_title_label, LV_LABEL_LONG_MODE_DOTS);
+  lv_label_set_text(s_tag_title_label, fm_base_name(s_current_path));
+  ui_theme_style_label_primary(s_tag_title_label);
+
+  s_tag_artist_label = lv_label_create(card);
+  lv_obj_set_width(s_tag_artist_label, 288);
+  lv_label_set_long_mode(s_tag_artist_label,  LV_LABEL_LONG_MODE_DOTS);
+  lv_label_set_text(s_tag_artist_label, "");
+  ui_theme_style_label_secondary(s_tag_artist_label);
 
   s_tech_label = lv_label_create(card);
   lv_obj_set_width(s_tech_label, 288);
@@ -828,7 +856,8 @@ static void preview_audio_close_foreground(void) {
   ui_chrome_detach(&s_chrome);
   preview_audio_reset_adjust_repeats();
   s_active = false;
-  s_filename_label = NULL;
+  s_tag_title_label = NULL;
+  s_tag_artist_label = NULL;
   s_tech_label = NULL;
   s_track_label = NULL;
   s_time_label = NULL;
