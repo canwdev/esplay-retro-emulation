@@ -19,8 +19,7 @@
 
 #define EQ_BANDS      3             /* low / mid / high                */
 #define EQ_DEFAULT_FS 44100.0f      /* nominal sample rate for presets */
-#define SHELF_Q       0.707f        /* maximally-flat shelf slope      */
-#define PEAKING_Q     1.0f          /* moderate-width peaking filter   */
+#define PEAKING_Q     2.0f          /* focused peaking filter Q        */
 
 /* ------------------------------------------------------------------ types */
 
@@ -63,7 +62,7 @@ static void coeff_low_shelf(biquad_coeff_t *c, float fc, float gain_db,
   float cos_w = cosf(w0);
   float sin_w = sinf(w0);
   float A     = powf(10.0f, gain_db / 40.0f);
-  float beta  = sqrtf(A) / SHELF_Q;
+  float beta  = sqrtf(A);  /* S=1 — steepest flat shelf */
 
   float b0 = A * ((A + 1.0f) - (A - 1.0f) * cos_w + beta * sin_w);
   float b1 = 2.0f * A * ((A - 1.0f) - (A + 1.0f) * cos_w);
@@ -87,7 +86,7 @@ static void coeff_high_shelf(biquad_coeff_t *c, float fc, float gain_db,
   float cos_w = cosf(w0);
   float sin_w = sinf(w0);
   float A     = powf(10.0f, gain_db / 40.0f);
-  float beta  = sqrtf(A) / SHELF_Q;
+  float beta  = sqrtf(A);  /* S=1 — steepest flat shelf */
 
   float b0 = A * ((A + 1.0f) + (A - 1.0f) * cos_w + beta * sin_w);
   float b1 = -2.0f * A * ((A - 1.0f) + (A + 1.0f) * cos_w);
@@ -141,29 +140,29 @@ static void eq_build_preset(eq_preset_t preset) {
     break; /* all pass-through */
 
   case EQ_PRESET_BASS_BOOST:
-    /* Low shelf +8 dB @ 80 Hz */
-    coeff_low_shelf(&s_coeff[0], 80.0f, 8.0f, fs);
+    /* Low shelf +12 dB @ 200 Hz */
+    coeff_low_shelf(&s_coeff[0], 200.0f, 12.0f, fs);
     break;
 
   case EQ_PRESET_TREBLE_BOOST:
-    /* High shelf +6 dB @ 10 kHz */
-    coeff_high_shelf(&s_coeff[2], 10000.0f, 6.0f, fs);
+    /* High shelf +10 dB @ 8 kHz */
+    coeff_high_shelf(&s_coeff[2], 8000.0f, 10.0f, fs);
     break;
 
   case EQ_PRESET_VOCAL:
-    /* Peaking +4 dB @ 1 kHz, Q = 1.0 */
-    coeff_peaking(&s_coeff[1], 1000.0f, 4.0f, PEAKING_Q, fs);
+    /* Peaking +8 dB @ 1.2 kHz, Q = 2.0 */
+    coeff_peaking(&s_coeff[1], 1200.0f, 8.0f, PEAKING_Q, fs);
     break;
 
   case EQ_PRESET_ROCK:
-    /* V-shape: low +6 dB @ 100 Hz + high +4 dB @ 8 kHz */
-    coeff_low_shelf(&s_coeff[0], 100.0f, 6.0f, fs);
-    coeff_high_shelf(&s_coeff[2], 8000.0f, 4.0f, fs);
+    /* V-shape: low +10 dB @ 200 Hz + high +8 dB @ 6 kHz */
+    coeff_low_shelf(&s_coeff[0], 200.0f, 10.0f, fs);
+    coeff_high_shelf(&s_coeff[2], 6000.0f, 8.0f, fs);
     break;
 
   case EQ_PRESET_BASS_CUT:
-    /* Low shelf –8 dB @ 100 Hz (protect small speakers) */
-    coeff_low_shelf(&s_coeff[0], 100.0f, -8.0f, fs);
+    /* Low shelf –12 dB @ 200 Hz (protect small speakers) */
+    coeff_low_shelf(&s_coeff[0], 200.0f, -12.0f, fs);
     break;
 
   default:
