@@ -12,6 +12,7 @@
 #include "platform_time.h"
 #include "ui_backlight.h"
 #include "ui_chrome.h"
+#include "ui_font.h"
 #include "ui_home.h"
 #include "ui_settings.h"
 #include "ui_theme.h"
@@ -414,7 +415,7 @@ static void preview_audio_update_ui(bool force) {
   if (vol_changed) {
     s_last_vol = vol;
     if (s_vol_pct_label && lv_obj_is_valid(s_vol_pct_label))
-      lv_label_set_text_fmt(s_vol_pct_label, LV_SYMBOL_VOLUME_MAX " %u%%", vol);
+      lv_label_set_text_fmt(s_vol_pct_label, "%u%%", vol);
   }
 
   uint32_t pos_sec = pos / 1000;
@@ -447,11 +448,11 @@ static void preview_audio_update_ui(bool force) {
   bool playing = audio_is_playing();
   if (force || paused != s_last_paused || playing != s_last_playing) {
     if (paused)
-      lv_label_set_text(s_status_label, LV_SYMBOL_PAUSE " Pause");
+      lv_label_set_text(s_status_label, LV_SYMBOL_PAUSE " Paused");
     else if (playing)
       lv_label_set_text(s_status_label, LV_SYMBOL_PLAY " Playing");
     else {
-      lv_label_set_text(s_status_label, LV_SYMBOL_STOP " Stop");
+      lv_label_set_text(s_status_label, LV_SYMBOL_STOP " Stopped");
       PREVIEW_AUDIO_LOGW("update_ui: trans to STOP! prev_paused=%d prev_playing=%d",
                          s_last_paused, s_last_playing);
     }
@@ -727,31 +728,41 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_obj_t *card = lv_obj_create(screen);
   lv_obj_remove_style_all(card);
   ui_theme_style_panel(card);
-  lv_obj_set_size(card, 308, 100);
+  lv_obj_set_size(card, LV_PCT(90), 144);
   lv_obj_align(card, LV_ALIGN_TOP_MID, 0, ui_chrome_body_top() + 2);
   lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
                         LV_FLEX_ALIGN_START);
-  lv_obj_set_style_pad_all(card, 4, 0);
-  lv_obj_set_style_pad_row(card, 0, 0);
+  lv_obj_set_style_pad_all(card, 6, 0);
+  lv_obj_set_style_pad_row(card, 2, 0);
 
   s_tag_title_label = lv_label_create(card);
-  lv_obj_set_width(s_tag_title_label, 288);
+  lv_obj_set_width(s_tag_title_label, LV_PCT(100));
   lv_label_set_long_mode(s_tag_title_label, LV_LABEL_LONG_MODE_DOTS);
   lv_label_set_text(s_tag_title_label, fm_base_name(s_current_path));
   ui_theme_style_label_primary(s_tag_title_label);
 
   s_tag_artist_label = lv_label_create(card);
-  lv_obj_set_width(s_tag_artist_label, 288);
+  lv_obj_set_width(s_tag_artist_label, LV_PCT(100));
   lv_label_set_long_mode(s_tag_artist_label,  LV_LABEL_LONG_MODE_DOTS);
   lv_label_set_text(s_tag_artist_label, "");
   ui_theme_style_label_secondary(s_tag_artist_label);
 
+  /* spacer between artist and tech info */
+  lv_obj_t *card_gap = lv_obj_create(card);
+  lv_obj_remove_style_all(card_gap);
+  lv_obj_set_height(card_gap, 6);
+
   s_tech_label = lv_label_create(card);
-  lv_obj_set_width(s_tech_label, 288);
+  lv_obj_set_width(s_tech_label, LV_PCT(100));
   lv_label_set_long_mode(s_tech_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
   lv_label_set_text(s_tech_label, "");
   ui_theme_style_label_secondary(s_tech_label);
+
+  /* filler stretches card to fill remaining space (flex:1) */
+  lv_obj_t *card_fill = lv_obj_create(card);
+  lv_obj_remove_style_all(card_fill);
+  lv_obj_set_flex_grow(card_fill, 1);
 
   /* ---- time row: pos / status / dur (space-between) ---- */
   lv_obj_t *time_row = lv_obj_create(screen);
@@ -775,22 +786,23 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_label_set_text(s_time_dur_label, "0:00");
   ui_theme_style_label_secondary(s_time_dur_label);
 
-  /* ---- progress bar ---- */
+  /* ---- progress bar (full width) ---- */
   s_progress_bar = lv_bar_create(screen);
-  lv_obj_set_size(s_progress_bar, LV_PCT(90), 10);
+  lv_obj_set_size(s_progress_bar, LV_PCT(94), 10);
   lv_bar_set_range(s_progress_bar, 0, 100);
   ui_theme_style_bar(s_progress_bar);
   lv_obj_align(s_progress_bar, LV_ALIGN_BOTTOM_MID, 0, -32);
 
-  /* ---- info row: track / mode / eq … vol, space-between ---- */
+  /* ---- info row (start-aligned, spacer pushes vol right) ---- */
   lv_obj_t *info_row = lv_obj_create(screen);
   lv_obj_remove_style_all(info_row);
   lv_obj_set_size(info_row, LV_PCT(100), 22);
   lv_obj_align(info_row, LV_ALIGN_BOTTOM_MID, 0, -6);
   lv_obj_set_flex_flow(info_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(info_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+  lv_obj_set_flex_align(info_row, LV_FLEX_ALIGN_START,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_hor(info_row, 8, 0);
+  lv_obj_set_style_pad_column(info_row, 3, 0);
 
   s_track_label = lv_label_create(info_row);
   lv_label_set_text(s_track_label, "1 / 1");
@@ -804,9 +816,19 @@ static bool preview_audio_build_foreground(lv_obj_t *screen) {
   lv_label_set_text(s_eq_label, eq_preset_name(eq_get_preset()));
   ui_theme_style_label_accent(s_eq_label);
 
-  /* volume: icon + pct in one label */
+  /* spacer pushes volume group to the right */
+  lv_obj_t *spacer = lv_obj_create(info_row);
+  lv_obj_remove_style_all(spacer);
+  lv_obj_set_flex_grow(spacer, 1);
+  lv_obj_set_height(spacer, 1);
+
+  lv_obj_t *vol_icon = lv_label_create(info_row);
+  lv_label_set_text(vol_icon, LV_SYMBOL_VOLUME_MAX);
+  lv_obj_set_style_text_font(vol_icon, ui_font_builtin(), 0);
+  ui_theme_style_label_accent(vol_icon);
+
   s_vol_pct_label = lv_label_create(info_row);
-  lv_label_set_text_fmt(s_vol_pct_label, LV_SYMBOL_VOLUME_MAX " %u%%", 50);
+  lv_label_set_text(s_vol_pct_label, "50%");
   ui_theme_style_label_secondary(s_vol_pct_label);
 
   s_active = true;
