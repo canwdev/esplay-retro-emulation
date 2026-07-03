@@ -1,5 +1,6 @@
 #include "preview_audio.h"
 #include "preview_audio_lrc.h"
+#include "preview_audio_playlist.h"
 
 #include "audio.h"
 #include "eq.h"
@@ -9,7 +10,6 @@
 #include "input_bridge.h"
 #include "input_repeat.h"
 #include "platform_log.h"
-#include "platform_mem.h"
 #include "platform_time.h"
 #include "ui_backlight.h"
 #include "ui_chrome.h"
@@ -24,12 +24,10 @@
 #include "esp_random.h"
 #endif
 
-#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/stat.h>
 
 static const char *TAG = "preview_audio";
@@ -38,30 +36,9 @@ static const char *TAG = "preview_audio";
 #define PREVIEW_AUDIO_LOGW(...) platform_log(PLATFORM_LOG_WARN, TAG, __VA_ARGS__)
 #define PREVIEW_AUDIO_LOGE(...) platform_log(PLATFORM_LOG_ERROR, TAG, __VA_ARGS__)
 
-static char *preview_audio_strdup(const char *s) {
-  if (!s)
-    return NULL;
-  size_t len = strlen(s);
-  char *d = malloc(len + 1);
-  if (d)
-    memcpy(d, s, len + 1);
-  return d;
-}
-
-static uint32_t preview_audio_random_u32(void) {
-  #ifdef TARGET_SIM
-    return ((uint32_t)rand() << 16) ^ (uint32_t)rand();
-  #else
-    return esp_random();
-  #endif
-}
-
 static void preview_audio_wait_ms(uint32_t ms) {
   platform_sleep_ms(ms);
 }
-
-#define AUDIO_PLAYLIST_MAX 512
-#define AUDIO_PATH_MAX     256
 #define AUDIO_SEEK_STEP_SECONDS   5
 #define AUDIO_ADJUST_ACCEL_EVERY  4
 #define AUDIO_ADJUST_MAX_SCALE    4
@@ -74,14 +51,8 @@ typedef enum {
   PLAY_MODE_COUNT,
 } play_mode_t;
 
-static char **s_playlist = NULL;
-static int  s_playlist_count;
-static int  s_current_index;
-static int  s_shuffle_order[AUDIO_PLAYLIST_MAX];
-static int  s_shuffle_pos;
+static audio_playlist_t s_pl;
 static char s_current_path[AUDIO_PATH_MAX];
-static char s_playlist_cwd[AUDIO_PATH_MAX];
-static bool s_playlist_from_shared;
 static bool s_active;
 static bool s_session_active;
 static bool s_close_to_background;
@@ -139,8 +110,6 @@ static bool preview_audio_prepare_session(const char *path, char *shared_names,
                                           const char *cwd_override);
 static void preview_audio_persist_state(bool armed);
 static bool preview_audio_path_exists(const char *path);
-static bool preview_audio_copy_dirname(const char *path, char *out,
-                                       size_t out_sz);
 
 static const input_repeat_config_t s_audio_adjust_repeat = {
     .initial_delay_ms = 400,
@@ -198,21 +167,6 @@ static bool preview_audio_path_exists(const char *path) {
 #endif
 }
 
-static bool preview_audio_copy_dirname(const char *path, char *out,
-                                       size_t out_sz) {
-  if (!path || !out || out_sz == 0)
-    return false;
-  const char *slash = strrchr(path, '/');
-  if (!slash)
-    return false;
-  size_t len = (size_t)(slash - path);
-  if (len == 0 || len >= out_sz)
-    return false;
-  memcpy(out, path, len);
-  out[len] = '\0';
-  return true;
-}
-
 static void preview_audio_persist_state(bool armed) {
   hal_settings_save(SettingMusicSessionArmed, armed ? 1 : 0);
   if (s_current_path[0] != '\0')
@@ -220,167 +174,14 @@ static void preview_audio_persist_state(bool armed) {
 }
 
 static void preview_audio_sync_file_manager_cwd(void) {
-  if (s_playlist_cwd[0] != '\0')
-    fm_set_cwd(s_playlist_cwd);
+  if (s_pl.cwd[0] != '\0')
+    fm_set_cwd(s_pl.cwd);
 }
 
 /* ------------------------------------------------------------------ can_open */
 
 static bool preview_audio_can_open(const char *path) {
   return fm_is_playable_audio_filename(fm_base_name(path));
-}
-
-/* ------------------------------------------------------------------ playlist */
-
-static int preview_playlist_compare(const void *a, const void *b) {
-  return strcasecmp(*(const char * const *)a, *(const char * const *)b);
-}
-
-static void preview_audio_free_playlist(void) {
-  if (s_playlist) {
-    for (int i = 0; i < s_playlist_count; i++) {
-      if (s_playlist[i]) {
-        free(s_playlist[i]);
-      }
-    }
-    free(s_playlist);
-    s_playlist = NULL;
-  }
-}
-
-static void preview_audio_shuffle_reset(int start_index) {
-  if (s_playlist_count <= 0)
-    return;
-
-  if (start_index < 0 || start_index >= s_playlist_count)
-    start_index = 0;
-
-  for (int i = 0; i < s_playlist_count; i++)
-    s_shuffle_order[i] = i;
-
-  if (start_index != 0) {
-    int tmp = s_shuffle_order[0];
-    s_shuffle_order[0] = s_shuffle_order[start_index];
-    s_shuffle_order[start_index] = tmp;
-  }
-
-  for (int i = s_playlist_count - 1; i > 1; i--) {
-    uint32_t r = preview_audio_random_u32();
-    int j = 1 + (int)(r % (uint32_t)i);
-    int tmp = s_shuffle_order[i];
-    s_shuffle_order[i] = s_shuffle_order[j];
-    s_shuffle_order[j] = tmp;
-  }
-
-  s_shuffle_pos = 0;
-}
-
-static int preview_audio_shuffle_find_pos(int playlist_index) {
-  for (int i = 0; i < s_playlist_count; i++) {
-    if (s_shuffle_order[i] == playlist_index)
-      return i;
-  }
-  return 0;
-}
-
-static int preview_audio_shuffle_step(int delta, bool restart_round) {
-  if (s_playlist_count <= 1)
-    return s_current_index;
-
-  s_shuffle_pos = preview_audio_shuffle_find_pos(s_current_index);
-
-  if (delta > 0) {
-    if (restart_round && s_shuffle_pos >= s_playlist_count - 1) {
-      preview_audio_shuffle_reset(s_current_index);
-      if (s_playlist_count > 1)
-        s_shuffle_pos = 1;
-      return s_shuffle_order[s_shuffle_pos];
-    }
-    s_shuffle_pos++;
-    if (s_shuffle_pos >= s_playlist_count)
-      s_shuffle_pos = 0;
-  } else if (delta < 0) {
-    s_shuffle_pos--;
-    if (s_shuffle_pos < 0)
-      s_shuffle_pos = s_playlist_count - 1;
-  }
-
-  return s_shuffle_order[s_shuffle_pos];
-}
-
-static bool preview_audio_build_playlist(preview_open_args_t *args,
-                                         const char *current) {
-  s_playlist_count = 0;
-  s_current_index  = 0;
-  s_shuffle_pos    = 0;
-
-  if (args->cwd)
-    strlcpy(s_playlist_cwd, args->cwd, sizeof(s_playlist_cwd));
-  else
-    preview_audio_copy_dirname(current, s_playlist_cwd, sizeof(s_playlist_cwd));
-
-  if (args->shared_names && args->shared_count > 0 && args->shared_name_stride == FM_NAME_LEN) {
-    s_playlist = malloc((size_t)args->shared_count * sizeof(char *));
-    if (!s_playlist) {
-      PREVIEW_AUDIO_LOGE("Failed to allocate memory for s_playlist from shared");
-      platform_free((void *)args->shared_names);
-      args->shared_names = NULL;
-      return false;
-    }
-    for (int i = 0; i < args->shared_count; i++) {
-      const char *src = args->shared_names + (size_t)i * FM_NAME_LEN;
-      s_playlist[i] = preview_audio_strdup(src);
-    }
-    s_playlist_count = args->shared_count;
-    platform_free((void *)args->shared_names);
-    args->shared_names = NULL;
-    s_playlist_from_shared = true;
-    s_current_index = args->shared_index >= 0 ? args->shared_index : 0;
-    if (s_current_index >= s_playlist_count)
-      s_current_index = 0;
-    preview_audio_shuffle_reset(s_current_index);
-    return true;
-  }
-
-  s_playlist = malloc(AUDIO_PLAYLIST_MAX * sizeof(char *));
-  if (!s_playlist) {
-    PREVIEW_AUDIO_LOGE("Failed to allocate memory for s_playlist");
-    return false;
-  }
-
-  DIR *dir = opendir(s_playlist_cwd);
-  if (!dir) {
-    free(s_playlist);
-    s_playlist = NULL;
-    return false;
-  }
-
-  struct dirent *de;
-  while ((de = readdir(dir)) != NULL && s_playlist_count < AUDIO_PLAYLIST_MAX) {
-    if (de->d_type != DT_REG && de->d_type != DT_UNKNOWN)
-      continue;
-    if (!fm_is_playable_audio_filename(de->d_name))
-      continue;
-    s_playlist[s_playlist_count] = preview_audio_strdup(de->d_name);
-    if (s_playlist[s_playlist_count]) {
-      s_playlist_count++;
-    }
-  }
-  closedir(dir);
-
-  if (s_playlist_count > 1)
-    qsort(s_playlist, s_playlist_count, sizeof(char *), preview_playlist_compare);
-
-  const char *cur = fm_base_name(current);
-  for (int i = 0; i < s_playlist_count; i++) {
-    if (strcasecmp(s_playlist[i], cur) == 0) {
-      s_current_index = i;
-      break;
-    }
-  }
-
-  preview_audio_shuffle_reset(s_current_index);
-  return true;
 }
 
 /* ------------------------------------------------------------------ UI update */
@@ -441,13 +242,13 @@ static void preview_audio_update_ui(bool force) {
     s_last_dur_sec = dur_sec;
   }
 
-  if (s_track_label && lv_obj_is_valid(s_track_label) && s_playlist_count > 0)
-    if (force || s_last_track_index != s_current_index ||
-        s_last_track_count != s_playlist_count) {
-      lv_label_set_text_fmt(s_track_label, "%d/%d", s_current_index + 1,
-                            s_playlist_count);
-      s_last_track_index = s_current_index;
-      s_last_track_count = s_playlist_count;
+  if (s_track_label && lv_obj_is_valid(s_track_label) && s_pl.count > 0)
+    if (force || s_last_track_index != s_pl.current_index ||
+        s_last_track_count != s_pl.count) {
+      lv_label_set_text_fmt(s_track_label, "%d/%d", s_pl.current_index + 1,
+                            s_pl.count);
+      s_last_track_index = s_pl.current_index;
+      s_last_track_count = s_pl.count;
     }
 
   bool paused  = audio_is_paused();
@@ -711,31 +512,21 @@ static void preview_audio_start_track(const char *path) {
   preview_audio_update_ui(true);
 }
 
-static bool preview_audio_build_path(char *out, size_t out_sz, const char *name) {
-  if (!out || out_sz == 0 || !name || name[0] == '\0' || s_playlist_cwd[0] == '\0')
-    return false;
-  strlcpy(out, s_playlist_cwd, out_sz);
-  if (strlcat(out, "/", out_sz) >= out_sz)
-    return false;
-  if (strlcat(out, name, out_sz) >= out_sz)
-    return false;
-  return true;
-}
-
 static void preview_audio_play_index(int idx) {
-  if (s_playlist_count == 0)
+  if (s_pl.count == 0)
     return;
   while (idx < 0)
-    idx += s_playlist_count;
-  idx %= s_playlist_count;
-  s_current_index = idx;
+    idx += s_pl.count;
+  idx %= s_pl.count;
+  s_pl.current_index = idx;
 
   char full[AUDIO_PATH_MAX];
-  if (!preview_audio_build_path(full, sizeof(full), s_playlist[s_current_index]))
+  if (!audio_playlist_build_path(&s_pl, full, sizeof(full),
+                                  s_pl.items[s_pl.current_index]))
     return;
 
   PREVIEW_AUDIO_LOGI("play_index idx=%d playlist=%s count=%d full=%s",
-                     idx, s_playlist[idx], s_playlist_count, full);
+                     idx, s_pl.items[idx], s_pl.count, full);
   preview_audio_start_track(full);
 }
 
@@ -746,24 +537,13 @@ static bool preview_audio_prepare_session(const char *path, char *shared_names,
   if (!path || path[0] == '\0')
     return false;
 
-  s_playlist = NULL;
-  s_playlist_count = 0;
-  s_current_index = 0;
-  s_shuffle_pos = 0;
-  s_playlist_cwd[0] = '\0';
-  s_playlist_from_shared = false;
+  audio_playlist_init(&s_pl);
   s_close_to_background = false;
   strlcpy(s_current_path, path, sizeof(s_current_path));
 
-  preview_open_args_t args = {
-      .cwd = cwd_override,
-      .shared_names = shared_names,
-      .shared_count = shared_count,
-      .shared_index = shared_index,
-      .shared_name_stride = shared_name_stride,
-  };
-
-  if (!preview_audio_build_playlist(&args, path)) {
+  if (!audio_playlist_build(&s_pl, cwd_override, path,
+                            shared_names, shared_count,
+                            shared_index, shared_name_stride)) {
     return false;
   }
   s_session_active = true;
@@ -989,15 +769,10 @@ static void preview_audio_close_foreground(void) {
 }
 
 static void preview_audio_reset_session_state(void) {
-  preview_audio_free_playlist();
+  audio_playlist_free(&s_pl);
   preview_audio_close_foreground();
   preview_audio_drop_session_timer();
-  s_playlist_count = 0;
-  s_current_index = 0;
-  s_shuffle_pos = 0;
   s_current_path[0] = '\0';
-  s_playlist_cwd[0] = '\0';
-  s_playlist_from_shared = false;
   s_session_active = false;
   s_close_to_background = false;
   s_track_confirmed_playing = false;
@@ -1070,16 +845,16 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
   }
   if (edge[GAMEPAD_INPUT_L]) {
     if (s_play_mode == PLAY_MODE_SHUFFLE)
-      preview_audio_play_index(preview_audio_shuffle_step(-1, false));
+      preview_audio_play_index(audio_playlist_shuffle_step(&s_pl, -1, false));
     else
-      preview_audio_play_index(s_current_index - 1);
+      preview_audio_play_index(s_pl.current_index - 1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_R]) {
     if (s_play_mode == PLAY_MODE_SHUFFLE)
-      preview_audio_play_index(preview_audio_shuffle_step(1, false));
+      preview_audio_play_index(audio_playlist_shuffle_step(&s_pl, 1, false));
     else
-      preview_audio_play_index(s_current_index + 1);
+      preview_audio_play_index(s_pl.current_index + 1);
     return true;
   }
   if (edge[GAMEPAD_INPUT_START]) {
@@ -1093,7 +868,7 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
     bool p = audio_is_paused(), pl = audio_is_playing();
     PREVIEW_AUDIO_LOGI("key: A toggle pause p=%d playing=%d", p, pl);
     if (!pl && !p)
-      preview_audio_play_index(s_current_index);
+      preview_audio_play_index(s_pl.current_index);
     else
       audio_toggle_pause();
     preview_audio_update_ui(true);
@@ -1102,7 +877,7 @@ static bool preview_audio_on_key(const input_gamepad_state *gp,
   if (edge[GAMEPAD_INPUT_SELECT]) {
     s_play_mode = (play_mode_t)((s_play_mode + 1) % PLAY_MODE_COUNT);
     if (s_play_mode == PLAY_MODE_SHUFFLE)
-      preview_audio_shuffle_reset(s_current_index);
+      audio_playlist_shuffle_reset(&s_pl, s_pl.current_index);
     update_mode_label();
     return true;
   }
@@ -1134,22 +909,22 @@ static void preview_audio_session_tick(bool force_ui) {
 
   if (s_track_confirmed_playing && !playing && !paused) {
     PREVIEW_AUDIO_LOGI("timer: track-end detected, mode=%d idx=%d cnt=%d",
-                       s_play_mode, s_current_index, s_playlist_count);
+                       s_play_mode, s_pl.current_index, s_pl.count);
     s_track_confirmed_playing = false;
     s_last_playing = false; /* prevent stale UI state triggering on next tick */
     switch (s_play_mode) {
       case PLAY_MODE_LIST_LOOP:
-        preview_audio_play_index((s_current_index + 1) % s_playlist_count);
+        preview_audio_play_index((s_pl.current_index + 1) % s_pl.count);
         return;
       case PLAY_MODE_SHUFFLE:
-        preview_audio_play_index(preview_audio_shuffle_step(1, true));
+        preview_audio_play_index(audio_playlist_shuffle_step(&s_pl, 1, true));
         return;
       case PLAY_MODE_SINGLE_LOOP:
-        preview_audio_play_index(s_current_index);
+        preview_audio_play_index(s_pl.current_index);
         return;
       case PLAY_MODE_LIST_PLAY:
-        if (s_current_index < s_playlist_count - 1) {
-          preview_audio_play_index(s_current_index + 1);
+        if (s_pl.current_index < s_pl.count - 1) {
+          preview_audio_play_index(s_pl.current_index + 1);
           return;
         }
         /* Last track finished — fall through to update UI (shows Stop). */
@@ -1190,9 +965,9 @@ bool preview_audio_session_switch_track(int delta) {
   if (!preview_audio_session_is_playback_live() || delta == 0)
     return false;
   if (s_play_mode == PLAY_MODE_SHUFFLE)
-    preview_audio_play_index(preview_audio_shuffle_step((delta > 0) ? 1 : -1, false));
+    preview_audio_play_index(audio_playlist_shuffle_step(&s_pl, (delta > 0) ? 1 : -1, false));
   else
-    preview_audio_play_index(s_current_index + ((delta > 0) ? 1 : -1));
+    preview_audio_play_index(s_pl.current_index + ((delta > 0) ? 1 : -1));
   return true;
 }
 

@@ -60,6 +60,7 @@ add_executable(launcher_sim
   ../main/preview/preview_text.c
   ../main/preview/preview_audio.c
   ../main/preview/preview_audio_lrc.c
+  ../main/preview/preview_audio_playlist.c
   ../main/preview/preview_bmp.c
 )
 
