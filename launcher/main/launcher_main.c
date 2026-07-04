@@ -1,5 +1,4 @@
 /* Esplay Launcher Main File */
-#include "appfs.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -7,7 +6,6 @@
 #include "freertos/task.h"
 #include "gamepad.h"
 #include "hal_audio.h"
-#include "hal_display.h"
 #include "hal_storage.h"
 #include "input_bridge.h"
 #include "preview_audio.h"
@@ -72,7 +70,6 @@ static void init_system_components(void) {
 
   ESP_LOGI(TAG, "Initializing LCD display");
   lcd_init(&panel_handle);
-  hal_display_set_panel(panel_handle);
 
   ESP_LOGI(TAG, "Initializing gamepad");
   gamepad_init();
@@ -126,7 +123,6 @@ static void init_lvgl_display(void) {
 
 static void init_ui(void) {
   hal_storage_mount();
-  appfs_init();
   preview_audio_restore_persisted_session();
   ui_home_create();
 }

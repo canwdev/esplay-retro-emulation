@@ -22,17 +22,6 @@ void hal_display_flush(int x1, int y1, int x2, int y2, uint8_t *rgb565) {
   lcd_draw(s_panel, x1, y1, x2 + 1, y2 + 1, rgb565);
 }
 
-void hal_display_flush_raw(int x1, int y1, int x2, int y2, uint8_t *rgb565) {
-  if (!s_inited)
-    return;
-  lcd_draw(s_panel, x1, y1, x2 + 1, y2 + 1, rgb565);
-}
-
 void hal_display_set_brightness(uint8_t pct) {
   lcd_set_brightness(pct);
-}
-
-void hal_display_set_panel(esp_lcd_panel_handle_t panel) {
-  s_panel = panel;
-  s_inited = true;
 }

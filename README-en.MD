@@ -6,7 +6,7 @@
 
 Firmware for **ESPlay Micro** — SD card file browser, audio/text preview, and system settings. Forked from [pebri86/esplay-retro-emulation](https://github.com/pebri86/esplay-retro-emulation).
 
-> **See [CLAUDE.md](AGENTS.md) for the authoritative project scope and dev constraints** (features, removed modules, build notes, PC Simulator). This README is a quick start only; upstream docs on AppFS, WiFi file transfer, and multi-app `.app` packages are **out of date**.
+> **See [AGENTS.md](AGENTS.md) for the authoritative project scope and dev constraints** (features, removed modules, build notes, PC Simulator). This README is a quick start only; upstream docs on AppFS, WiFi file transfer, and multi-app `.app` packages are **out of date**.
 
 ### Features
 
@@ -16,7 +16,7 @@ Firmware for **ESPlay Micro** — SD card file browser, audio/text preview, and 
 - **CJK font** (Vonwaon 12px)
 - **PC Simulator** (optional) — desktop UI development; see [launcher/sim/README.md](launcher/sim/README.md)
 
-**Not included**: AppFS multi-app, WiFi / HTTP ROM upload, standalone Music page (see [CLAUDE.md](AGENTS.md)).
+**Not included**: AppFS multi-app, WiFi / HTTP ROM upload, standalone Music page (see [AGENTS.md](AGENTS.md)).
 
 ### Build
 
@@ -36,13 +36,13 @@ idf.py build
 idf.py flash monitor
 ```
 
-For faster UI iteration, flash app only: `idf.py app-flash monitor` (details in [CLAUDE.md](AGENTS.md)).
+For faster UI iteration, flash app only: `idf.py app-flash monitor` (details in [AGENTS.md](AGENTS.md)).
 
 ### Docs
 
 | File                                             | Description                                                               |
 | ------------------------------------------------ | ------------------------------------------------------------------------- |
-| [CLAUDE.md](AGENTS.md)                           | **Main doc** — scope, features, partitions, build, conventions, Simulator |
+| [AGENTS.md](AGENTS.md)                           | **Main doc** — scope, features, partitions, build, conventions, Simulator |
 | [launcher/sim/README.md](launcher/sim/README.md) | PC Simulator build, keys, testdata                                        |
 
 [↑ Back to top](#esplay-neo-firmware)
