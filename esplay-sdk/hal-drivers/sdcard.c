@@ -4,6 +4,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdmmc_cmd.h"
 #include <ctype.h>
 #include <dirent.h>
@@ -62,8 +64,19 @@ esp_err_t sdcard_open(const char *base_path) {
       .max_files = 5,
       .allocation_unit_size = CONFIG_WL_SECTOR_SIZE};
 
-  esp_err_t ret = esp_vfs_fat_sdmmc_mount(base_path, &host, &slot_config,
-                                          &mount_config, &card);
+  esp_err_t ret = ESP_FAIL;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    ret = esp_vfs_fat_sdmmc_mount(base_path, &host, &slot_config,
+                                  &mount_config, &card);
+    if (ret == ESP_OK)
+      break;
+    ESP_LOGW(TAG, "SDCard mount attempt %d failed: 0x%x", attempt + 1, ret);
+    if (attempt < 2) {
+      /* Power-cycle the card lines: reset SDMMC host, wait for card settle */
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+  }
+
   if (ret == ESP_OK) {
     isOpen = true;
     mounted_path = strdup(base_path);
