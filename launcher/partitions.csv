@@ -2,5 +2,6 @@
 nvs,        data,  nvs,      ,         0x9000,
 otadata,    data,  ota,      ,         0x2000,
 phy_init,   data,  phy,      ,         0x1000,
-launcher,   app,   factory,  ,         0xFC0000,
+launcher,   app,   factory,  ,         0x200000,
+appfs,      data,  undefined,0x220000, 0xDC0000,
 coredump,   data,  coredump, ,         0x10000,

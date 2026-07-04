@@ -4,6 +4,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Enable detailed debug logging for LRC module troubleshooting.
+ * Define to 1 to enable, 0 to disable (default).
+ * When enabled, logs every timestamp parse, index search, and text update. */
+#ifndef LRC_DEBUG_LOG
+#define LRC_DEBUG_LOG 1
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,10 +33,11 @@ bool preview_audio_lrc_has_data(void);
 /**
  * Get the lyric text that should be displayed at @a pos_ms.
  *
- * When @a force is true the return value is never NULL (an empty string
- * is returned before the first line).  When @a force is false the call
- * is treated as a periodic tick: repeated calls for the same line are
- * de-duplicated and return NULL.
+ * @param pos_ms Current playback position in milliseconds
+ * @param force If true, rebuild text even if unchanged (used after seek/interaction)
+ *
+ * @return Text to display, or empty string ("") if no lyrics match.
+ *         Always returns a valid pointer (never NULL).
  *
  * The returned pointer is valid until the next call into this module.
  */

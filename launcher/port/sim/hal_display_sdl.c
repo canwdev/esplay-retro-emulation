@@ -79,3 +79,7 @@ void hal_display_set_brightness(uint8_t pct) {
     pct = 100;
   s_brightness = pct;
 }
+
+void hal_display_flush_raw(int x1, int y1, int x2, int y2, uint8_t *rgb565) {
+  hal_display_flush(x1, y1, x2, y2, rgb565);
+}

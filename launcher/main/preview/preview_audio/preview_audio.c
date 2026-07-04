@@ -205,7 +205,20 @@ static void preview_audio_apply_seek_delta(int delta_seconds) {
   if (clamped_delta == 0)
     return;
 
+  PREVIEW_AUDIO_LOGI("seek: delta=%d, pos_before=%u, expect_pos=%u",
+                     clamped_delta, pos_ms, pos_ms + (uint32_t)clamped_delta * 1000);
+
   audio_seek_seconds(clamped_delta);
+  /* Wait for audio task to process the seek and update s_position_ms.
+   * audio_seek_seconds() is asynchronous — it only sets a pending flag.
+   * Without this delay, the next audio_get_position_ms() returns the
+   * pre-seek position, causing LRC lyrics to show the wrong line. */
+  platform_sleep_ms(100);
+  {
+    uint32_t pos_after = audio_get_position_ms();
+    PREVIEW_AUDIO_LOGI("seek: pos_after_sleep=%u (Δ=%+dms)",
+                       pos_after, (int)((int64_t)pos_after - (int64_t)pos_ms));
+  }
   preview_audio_lrc_seek_reset();
   preview_audio_update_ui(true);
 }

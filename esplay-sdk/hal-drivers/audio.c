@@ -62,9 +62,9 @@ static int16_t s_silence_buf[512];
 static mp3dec_t *s_mp3_dec;
 static uint8_t *s_mp3_buf;
 
-static uint32_t s_position_ms;
-static uint32_t s_duration_ms;
-static uint32_t s_sample_rate;
+static volatile uint32_t s_position_ms;
+static volatile uint32_t s_duration_ms;
+static volatile uint32_t s_sample_rate;
 static bool s_track_is_mp3;
 static volatile audio_track_type_t s_track_type;
 static volatile uint16_t s_track_channels;
@@ -429,7 +429,10 @@ static esp_err_t stream_wav_body(FILE *f, const wav_pcm_info_t *info) {
       if (s_seek_pending) {
         int32_t delta = s_seek_delta_sec;
         s_seek_pending = false;
-        wav_apply_seek(f, info, delta);
+        if (!wav_apply_seek(f, info, delta)) {
+          ESP_LOGW(TAG, "WAV seek fseek failed");
+          return ESP_FAIL;
+        }
         remaining = info->data_size - s_wav_position_bytes;
       }
       continue;
@@ -637,15 +640,27 @@ static esp_err_t stream_mp3_body(FILE *f, long file_size) {
         amp_disable();
         i2s_teardown();
 
-        if (mp3_fast_seek(f, s_mp3_dec, (uint32_t)target, file_size, buf_len,
-                          &buf_len, &decoded_samples) != ESP_OK)
+        uint32_t seek_start = esp_log_timestamp();
+        esp_err_t seek_err = mp3_fast_seek(f, s_mp3_dec, (uint32_t)target, file_size, buf_len,
+                                           &buf_len, &decoded_samples);
+        if (seek_err != ESP_OK) {
+          ESP_LOGW(TAG, "fast_seek failed, falling back to skip_to_ms (target=%u)", (uint32_t)target);
           mp3_skip_to_ms(f, s_mp3_dec, (uint32_t)target, s_mp3_buf,
                          MP3_IO_BUF_SZ, &buf_len, &decoded_samples);
+        }
+        ESP_LOGI(TAG, "seek done: method=%s target=%u actual=%u elapsed=%ums",
+                 (seek_err == ESP_OK) ? "fast" : "skip",
+                 (uint32_t)target, s_position_ms,
+                 (unsigned)(esp_log_timestamp() - seek_start));
 
         /* Restart I2S with a fresh DMA ring buffer.  Pre-fill it with silence
          * so the amp comes up cleanly with no pop or audio-position artifact. */
         if (s_sample_rate > 0 && !s_stop_requested) {
-          i2s_setup(s_sample_rate);
+          esp_err_t err = i2s_setup(s_sample_rate);
+          if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Seek: i2s_setup failed: %s", esp_err_to_name(err));
+            break;
+          }
           for (int sj = 0; sj < 4 && s_tx_chan && !s_stop_requested; sj++) {
             size_t nw = 0;
             i2s_channel_write(s_tx_chan, s_silence_buf, sizeof(s_silence_buf),
@@ -653,6 +668,8 @@ static esp_err_t stream_mp3_body(FILE *f, long file_size) {
           }
         }
         amp_enable();
+        got_audio_frame = false; /* force first-frame log after seek */
+        ESP_LOGI(TAG, "seek i2s restarted, audio active");
       }
       continue;
     }
@@ -736,6 +753,10 @@ static esp_err_t stream_mp3_body(FILE *f, long file_size) {
 
     decoded_samples += (uint64_t)samples;
     s_position_ms    = mp3_samples_to_ms(decoded_samples, s_sample_rate);
+    if (!got_audio_frame) {
+      got_audio_frame = true;
+      ESP_LOGI(TAG, "first frame after seek: pos=%u", s_position_ms);
+    }
   }
 
   if (!got_audio_frame) {

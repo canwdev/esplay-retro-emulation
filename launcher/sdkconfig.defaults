@@ -25,3 +25,15 @@ CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_USE_BMP=y
+
+# ESPlay Micro has 4MB PSRAM at 80MHz (WROVER module, quad SPI PSRAM).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_MODE_QUAD=y
+
+# Use custom partition table (partitions.csv)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Increase main task stack (default 3584 too small for nested init + log buffers)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
