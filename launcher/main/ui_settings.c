@@ -7,7 +7,6 @@
 #include "hal_system.h"
 #include "input_repeat.h"
 #include "platform_log.h"
-#include "platform_mem.h"
 #include "ui_app.h"
 #include "ui_backlight.h"
 #include "ui_chrome.h"
@@ -554,21 +553,6 @@ void ui_settings_create(void) {
   snprintf(storage_body, sizeof(storage_body), "Total %lu MB\nFree %lu MB",
            (unsigned long)tot / 1024, (unsigned long)free_space / 1024);
   settings_add_info_block(scroll, LV_SYMBOL_SD_CARD " Storage", storage_body);
-
-  char memory_body[96];
-  uint32_t flash = platform_flash_size();
-  uint32_t psram = platform_psram_size();
-  if (psram > 0) {
-    snprintf(memory_body, sizeof(memory_body), "Flash %lu MB\nPSRAM %lu MB\nFree DRAM %lu KB",
-             (unsigned long)flash / 1024 / 1024,
-             (unsigned long)psram / 1024 / 1024,
-             (unsigned long)platform_free_heap() / 1024);
-  } else {
-    snprintf(memory_body, sizeof(memory_body), "Flash %lu MB\nNo PSRAM\nFree DRAM %lu KB",
-             (unsigned long)flash / 1024 / 1024,
-             (unsigned long)platform_free_heap() / 1024);
-  }
-  settings_add_info_block(scroll, LV_SYMBOL_LIST " Memory", memory_body);
 
   hal_battery_t bat = {0};
   const char *charge_status = "Unknown";
