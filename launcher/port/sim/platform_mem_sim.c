@@ -22,3 +22,11 @@ uint32_t platform_free_heap(void) {
 uint32_t platform_largest_free_block(void) {
   return SIM_FREE_HEAP_BYTES;
 }
+
+uint32_t platform_flash_size(void) {
+  return 16u * 1024 * 1024;
+}
+
+uint32_t platform_psram_size(void) {
+  return 0;
+}
