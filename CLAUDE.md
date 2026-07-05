@@ -70,7 +70,7 @@ launcher/port/sim/    SDL2/POSIX stubs     (compile with TARGET_SIM)
 ```
 
 - **UI code must only include `hal/` and `platform_*` headers** — never SDL or ESP driver headers directly.
-- `launcher_main.c` is the exception: it still calls `hal-drivers` directly for init (`lcd_init`, `gamepad_init`, `audio_init`). After init, `hal_display_set_panel()` bridges the panel handle into the HAL layer so NES display code can use `hal_display_flush()`.
+- `launcher_main.c` is the exception: it still calls `hal-drivers` directly for init (`lcd_init`, `gamepad_init`, `audio_init`). After init, `hal_display_set_panel()` bridges the panel handle into the HAL layer so display code can use `hal_display_flush()`.
 - `TARGET_ESP32` / `TARGET_SIM` macros distinguish platforms at compile time.
 
 ### UI architecture (single-screen SPA)
@@ -84,18 +84,17 @@ launcher/port/sim/    SDL2/POSIX stubs     (compile with TARGET_SIM)
 
 Previews are registered `preview_app_t` structs in `preview/preview_registry.c` with lifecycle hooks: `can_open`, `open`, `close`, `on_key`, `on_timer`, `current_path`.
 
-Currently registered: audio (MP3/WAV + LRC lyrics), text (UTF-8/GB2312), BMP, **NES**. NES architecture details in [`nes/README.md`](launcher/main/preview/nes/README.md).
+Currently registered: audio (MP3/WAV + LRC lyrics), text (UTF-8/GB2312), BMP, **Emulator** (OTA multi-boot to retro-go sub-firmware).
 
-### NES Emulator (nofrendo + AppFS)
+### ROM 启动（OTA 多分区）
 
-NES ROMs are loaded into flash via a dedicated `appfs` partition (14MB at 0x220000). `esp_partition_mmap()` maps the ROM directly into CPU address space — **zero DRAM** for ROM storage. Rendering uses chunked 24-row flushes (matching LVGL's partial buffer size), synchronous on CPU0 to avoid tearing. See [preview/nes/README.md](launcher/main/preview/nes/README.md).
+ROM 通过 ESP32 OTA 多分区启动运行在 retro-go 子固件中，ROM 文件始终留在 SD 卡。见 [`docs/RETRO-GO.md`](docs/RETRO-GO.md)。
 
 ### Key source layout
 
 | Path | Purpose |
 |------|---------|
-| `launcher/main/` | UI, file manager, input, preview logic, appfs |
-| `launcher/main/preview/nes/` | NES emulator (preview app + nofrendo core) |
+| `launcher/main/` | UI, file manager, input, preview logic |
 | `launcher/hal/` | Portable HAL headers only |
 | `launcher/port/esp32/` | ESP32 HAL implementations |
 | `launcher/port/sim/` | Simulator HAL (SDL2, POSIX, Win32 compat) |
@@ -106,29 +105,22 @@ NES ROMs are loaded into flash via a dedicated `appfs` partition (14MB at 0x2200
 ## 当前功能（概要）
 
 - **主页**：Files（SD `/sd`）/ Settings。
-- **文件管理器**（`file_manager.c`）：虚拟滚动、删除；预览（音频/文本/BMP/NES）；`FM_MAX_ENTRIES` / `AUDIO_PLAYLIST_MAX` = **512**；预览前释放 `s_entries` 腾堆。
-- **NES 模拟器**（`preview/nes/`）：AppFS flash 加载 ROM → nofrendo 核心 → 分块渲染到 LCD。见 [nes/README.md](launcher/main/preview/nes/README.md)。
+- **文件管理器**（`file_manager.c`）：虚拟滚动、删除；预览（音频/文本/BMP/模拟器）；`FM_MAX_ENTRIES` / `AUDIO_PLAYLIST_MAX` = **512**；预览前释放 `s_entries` 腾堆。
+- **模拟器启动**（`preview_emulator.c`）：OTA 分区切换至 retro-go 子固件运行 ROM。
 - **Settings**（`ui_settings.c`）：亮度、音量、**16** 套主题（`UI_THEME_COUNT`）、熄屏、重启、LCD 测试；Storage / Battery / About。
 - **背光**（`ui_backlight.c`）：超时熄屏，任意键唤醒并吞首击。
 - **音频（ESP32）**：I2S GPIO 见 `sdkconfig.defaults` / menuconfig **Audio I2S speaker**。
 
-## 分区表（`launcher/partitions.csv`）
+## 分区表
 
-```
-nvs,        data, nvs,      0x9000,  0x6000
-otadata,    data, ota,      0x13000, 0x2000
-phy_init,   data, phy,      0x15000, 0x1000
-launcher,   app,  factory,  0x20000, 0x200000   (2MB)
-appfs,      data, undefined,0x220000,0xDC0000   (14MB, NES ROM storage)
-coredump,   data, coredump, 0xFE0000,0x10000
-```
+详见 [`docs/RETRO-GO.md`](docs/RETRO-GO.md) —— 统一 OTA 多分区布局（esplay-neo + retro-go 模拟器子固件）。
 
 变更后 **fullclean + 全量烧录**（`idf.py flash`）。
 
 ## Configuration
 
 - `launcher/sdkconfig.defaults` — 默认 Kconfig（16MB flash, WiFi disabled, LVGL clib malloc, FAT UTF-8 LFN, I2S GPIOs for ESPlay Micro, PSRAM config, main task stack 8KB）。
-- `launcher/partitions.csv` — 含 `appfs` 分区。变更需 `fullclean` + 全量 flash。
+- `launcher/partitions.csv` — 分区表定义文件。变更需 `fullclean` + 全量 flash。
 - `launcher/sdkconfig` — 本地覆盖；冲突时手动改或 `menuconfig` 后 reconfigure。
 - `main/CMakeLists.txt`：`REQUIRES esp_timer hal-drivers lvgl nvs_flash spi_flash`。
 
@@ -153,8 +145,6 @@ coredump,   data, coredump, 0xFE0000,0x10000
 | **多应用 AppFS bootloader** | 无 `launcher/bootloader_components/` |
 | **WiFi / HTTP / TLS** | 无 SoftAP、文件服务器、网络栈；`CONFIG_ESP_WIFI_ENABLED=n` |
 
-> **注意**：`appfs` 数据分区已恢复（用于 NES ROM 存储），但不同于原多应用系统的 `.app` 加载机制。
-
 ## Coding Conventions
 
 - **最小 diff**；不恢复已删模块。
@@ -165,5 +155,4 @@ coredump,   data, coredump, 0xFE0000,0x10000
 ## 内存参考
 
 - 固件 ~1.2MB（Debug）；LVGL 双缓冲 ~15KB×2。
-- 堆峰值：`s_entries`（512 entries × ~130B ≈ 66KB）或 NES buffers（frameBuffer 65KB + s_lcdfb 61KB + misc），不同时占用。
-- NES ROM 存 AppFS flash，零 DRAM 占用。
+- 堆峰值：`s_entries`（512 entries × ~130B ≈ 66KB）
