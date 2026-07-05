@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ESPlay Neo + Retro-Go 整合包烧录脚本
+ESPlay Neo Firmware + Retro-Go 整合包烧录脚本
 适用于 ESPlay Micro (ESP32)
 """
 
@@ -12,7 +12,7 @@ FLASH_MAP = [
     ("Bootloader (PSRAM)",      "bootloader.bin",        0x1000),
     ("Partition Table",         "partition-table.bin",   0x8000),
     ("OTA Initial Data",        "ota_data_initial.bin",  0xD000),
-    ("ESPlay Neo Launcher",     "launcher.bin",          0x10000),
+    ("ESPlay Neo Firmware Launcher",     "launcher.bin",          0x10000),
     ("retro-core",              "retro-core.bin",        0x210000),
     ("prboom-go (DOOM)",        "prboom-go.bin",         0x410000),
     ("gwenesis (MD/Genesis)",   "gwenesis.bin",          0x510000),

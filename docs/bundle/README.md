@@ -1,4 +1,4 @@
-# ESPlay Neo + Retro-Go 整合包
+# ESPlay Neo Firmware + Retro-Go 整合包
 
 > .bin 文件可从 [GitHub Releases](https://github.com/canwdev/esplay-neo-firmware/releases) 下载。开发者如需从源码构建后自行复制，请运行 `python copy.py`。
 
@@ -53,7 +53,7 @@ python flash.py COM3
 
 ## 使用方法
 
-1. 开机后自动进入 ESPlay Neo 启动器
+1. 开机后自动进入 ESPlay Neo Firmware 启动器
 2. 浏览 SD 卡文件管理器，找到 ROM 文件
 3. 按 **A 键** 打开 ROM → 自动重启进入模拟器
 4. 模拟器中按 **Select + A** 退出 → 返回启动器
@@ -83,7 +83,7 @@ python flash.py COM3
 | partition table | 0x8000 | 3KB | 统一 OTA 布局 |
 | NVS | 0x9000 | 16KB | 系统设置 |
 | OTA Data | 0xD000 | 8KB | 启动分区选择 |
-| launcher | 0x10000 | 2MB | ESPlay Neo 启动器 |
+| launcher | 0x10000 | 2MB | ESPlay Neo Firmware 启动器 |
 | retro-core | 0x210000 | 2MB | NES/GB/PCE/SMS/GG/SNES/Lynx |
 | prboom-go | 0x410000 | 1MB | DOOM |
 | gwenesis | 0x510000 | 2MB | MD/Genesis |

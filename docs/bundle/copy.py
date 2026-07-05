@@ -53,7 +53,7 @@ def copy_file(base_dir, src_rel, dst_name, optional=False):
 def main():
     retro_dir = find_retro_go()
 
-    print("ESPlay Neo + Retro-Go bundle copy")
+    print("ESPlay Neo Firmware + Retro-Go bundle copy")
     print(f"  esplay-neo: {REPO_DIR}")
     print(f"  retro-go  : {retro_dir or '(not found)'}")
     print(f"  bundle    : {BUNDLE_DIR}")
