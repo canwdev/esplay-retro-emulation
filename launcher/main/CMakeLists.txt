@@ -32,6 +32,6 @@ idf_component_register(
         "../port/esp32/platform_mem_esp.c"
         "../port/esp32/platform_time_esp.c"
     INCLUDE_DIRS "." "preview" "preview/preview_audio" "../hal" "../port/esp32"
-    REQUIRES esp_timer hal-drivers lvgl nvs_flash)
+    REQUIRES esp_timer hal-drivers lvgl nvs_flash spi_flash)
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC TARGET_ESP32)
