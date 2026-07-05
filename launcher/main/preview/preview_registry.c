@@ -1,11 +1,13 @@
 #include "preview.h"
 #include "preview_audio.h"
 #include "preview_bmp.h"
+#include "preview_emulator.h"
 #include "preview_text.h"
 
 static const preview_app_t *s_apps[] = {
     &preview_audio_app,
     &preview_bmp_app,
+    &preview_emulator_app,
     &preview_text_app,
 };
 

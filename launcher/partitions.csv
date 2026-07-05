@@ -1,6 +1,9 @@
-# Name,     Type,  SubType,  Offset,   Size,     Flags
-nvs,        data,  nvs,      ,         0x9000,
-otadata,    data,  ota,      ,         0x2000,
-phy_init,   data,  phy,      ,         0x1000,
-launcher,   app,   factory,  ,         0xFC0000,
-coredump,   data,  coredump, ,         0x10000,
+# Name,       Type, SubType,  Offset,   Size,     Flags
+nvs,          data, nvs,      0x9000,   0x4000,
+otadata,      data, ota,      0xD000,   0x2000,
+phy_init,     data, phy,      0xF000,   0x1000,
+launcher,     app,  ota_0,    0x10000,  0x200000,
+retro-core,   app,  ota_1,    0x210000, 0x200000,
+prboom-go,    app,  ota_2,    0x410000, 0x100000,
+gwenesis,     app,  ota_3,    0x510000, 0x200000,
+fmsx,         app,  ota_4,    0x710000, 0x100000,

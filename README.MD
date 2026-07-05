@@ -11,6 +11,7 @@
 ### 功能
 
 - **文件管理** — 浏览 SD 卡、虚拟滚动、删除
+- **游戏模拟器**（可选）— 整合 [retro-go](https://github.com/canwdev/retro-go-esplay-micro)，选中 ROM 自动启动模拟器，详见 [docs/RETRO-GO.md](docs/RETRO-GO.md)
 - **音乐播放器** — WAV/MP3，支持后台播放
 - **文本阅读器** — TXT 等支持格式，UTF-8 / GB2312
 - **图片查看器** — 目前仅支持 BMP
@@ -45,6 +46,7 @@ idf.py flash monitor
 | 文件                                             | 说明                                                              |
 | ------------------------------------------------ | ----------------------------------------------------------------- |
 | [AGENTS.md](AGENTS.md)                           | **主文档** — 项目现状、功能、分区、构建、编码约定、Simulator 指引 |
+| [docs/RETRO-GO.md](docs/RETRO-GO.md)             | Retro-Go 模拟器整合原理与刷入指南                                  |
 | [launcher/sim/README.md](launcher/sim/README.md) | PC Simulator 构建、按键、testdata                                 |
 
 [↑ 回到顶部](#esplay-neo-firmware)

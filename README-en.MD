@@ -11,6 +11,7 @@ Firmware for **ESPlay Micro** — SD card file browser, audio/text preview, and 
 ### Features
 
 - **Files** — browse SD card, virtual scroll, delete
+- **Game Emulators** (optional) — integrated [retro-go](https://github.com/canwdev/retro-go-esplay-micro), select a ROM to auto-launch the emulator; see [docs/RETRO-GO.md](docs/RETRO-GO.md)
 - **Preview** — WAV/MP3 , BMP, text (UTF-8 / GB2312) in the file manager
 - **Settings** — brightness, volume, theme, screen off, reboot, LCD test
 - **CJK font** (Vonwaon 12px)
@@ -43,6 +44,7 @@ For faster UI iteration, flash app only: `idf.py app-flash monitor` (details in 
 | File                                             | Description                                                               |
 | ------------------------------------------------ | ------------------------------------------------------------------------- |
 | [AGENTS.md](AGENTS.md)                           | **Main doc** — scope, features, partitions, build, conventions, Simulator |
+| [docs/RETRO-GO.md](docs/RETRO-GO.md)             | Retro-Go emulator integration guide                                       |
 | [launcher/sim/README.md](launcher/sim/README.md) | PC Simulator build, keys, testdata                                        |
 
 [↑ Back to top](#esplay-neo-firmware)

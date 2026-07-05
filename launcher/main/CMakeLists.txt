@@ -14,6 +14,7 @@ idf_component_register(
         "input_bridge.c"
         "preview/preview_registry.c"
         "preview/preview_text.c"
+        "preview/preview_emulator.c"
         "preview/preview_audio/preview_audio.c"
         "preview/preview_audio/preview_audio_lrc.c"
         "preview/preview_audio/preview_audio_playlist.c"
