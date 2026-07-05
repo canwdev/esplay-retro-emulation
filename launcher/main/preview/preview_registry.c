@@ -1,13 +1,17 @@
 #include "preview.h"
 #include "preview_audio.h"
 #include "preview_bmp.h"
+#ifdef TARGET_ESP32
 #include "preview_emulator.h"
+#endif
 #include "preview_text.h"
 
 static const preview_app_t *s_apps[] = {
     &preview_audio_app,
     &preview_bmp_app,
+#ifdef TARGET_ESP32
     &preview_emulator_app,
+#endif
     &preview_text_app,
 };
 
