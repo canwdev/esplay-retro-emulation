@@ -19,7 +19,7 @@ FLASH_MAP = [
     ("fmsx (MSX)",              "fmsx.bin",               0x710000),
 ]
 
-ESPTOOL = "esptool.py"
+ESPTOOL = "esptool"
 BAUD = 460800
 PORT = "COM9"
 
