@@ -36,7 +36,9 @@ static const emu_entry_t s_emu_map[] = {
     {"pce",            "pce",  1},
     {"lnx",            "lnx",  1},
     {"col rom",        "col",  1},
-    {"md gen",         "md",   3},
+    // .smd (Super Magic Drive) is the standard Genesis dump format;
+    // .md excluded — clashes with Markdown, which is handled by text preview.
+    {"gen smd",        "md",   3},
     {"wad",            "doom", 2},
     {"mx1 mx2 dsk",    "msx",  4},
 };
