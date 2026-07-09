@@ -140,29 +140,29 @@ static void eq_build_preset(eq_preset_t preset) {
     break; /* all pass-through */
 
   case EQ_PRESET_BASS_BOOST:
-    /* Low shelf +12 dB @ 200 Hz */
-    coeff_low_shelf(&s_coeff[0], 200.0f, 12.0f, fs);
+    /* Low shelf +6 dB @ 200 Hz */
+    coeff_low_shelf(&s_coeff[0], 200.0f, 6.0f, fs);
     break;
 
   case EQ_PRESET_TREBLE_BOOST:
-    /* High shelf +10 dB @ 8 kHz */
-    coeff_high_shelf(&s_coeff[2], 8000.0f, 10.0f, fs);
+    /* High shelf +5 dB @ 8 kHz */
+    coeff_high_shelf(&s_coeff[2], 8000.0f, 5.0f, fs);
     break;
 
   case EQ_PRESET_VOCAL:
-    /* Peaking +8 dB @ 1.2 kHz, Q = 2.0 */
-    coeff_peaking(&s_coeff[1], 1200.0f, 8.0f, PEAKING_Q, fs);
+    /* Peaking +4 dB @ 1.2 kHz, Q = 2.0 */
+    coeff_peaking(&s_coeff[1], 1200.0f, 4.0f, PEAKING_Q, fs);
     break;
 
   case EQ_PRESET_ROCK:
-    /* V-shape: low +10 dB @ 200 Hz + high +8 dB @ 6 kHz */
-    coeff_low_shelf(&s_coeff[0], 200.0f, 10.0f, fs);
-    coeff_high_shelf(&s_coeff[2], 6000.0f, 8.0f, fs);
+    /* V-shape: low +5 dB @ 200 Hz + high +4 dB @ 6 kHz */
+    coeff_low_shelf(&s_coeff[0], 200.0f, 5.0f, fs);
+    coeff_high_shelf(&s_coeff[2], 6000.0f, 4.0f, fs);
     break;
 
   case EQ_PRESET_BASS_CUT:
-    /* Low shelf –12 dB @ 200 Hz (protect small speakers) */
-    coeff_low_shelf(&s_coeff[0], 200.0f, -12.0f, fs);
+    /* Low shelf –6 dB @ 200 Hz (protect small speakers) */
+    coeff_low_shelf(&s_coeff[0], 200.0f, -6.0f, fs);
     break;
 
   default:
